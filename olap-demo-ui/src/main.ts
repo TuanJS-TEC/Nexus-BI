@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import Dashboard from './views/Dashboard.vue'
+import { installGlobalClickLogger } from './utils/clickLogger'
 import './style.css'
 
 const router = createRouter({
@@ -18,4 +19,5 @@ const app = createApp(App)
 
 app.use(pinia)
 app.use(router)
+installGlobalClickLogger(router)
 app.mount('#app')

@@ -467,9 +467,16 @@ FROM [{cube}]";
             if (!string.IsNullOrWhiteSpace(map.ProductHierarchyUniqueName))
                 rewritten = rewritten.Replace("[Dim Mat Hang].[Ma MH]", map.ProductHierarchyUniqueName, StringComparison.OrdinalIgnoreCase);
             if (!string.IsNullOrWhiteSpace(map.CustomerHierarchyUniqueName))
+            {
                 rewritten = rewritten.Replace("[Dim Khach Hang].[Ma KH]", map.CustomerHierarchyUniqueName, StringComparison.OrdinalIgnoreCase);
+                rewritten = rewritten.Replace("[Dim Khach Hang].[Hierarchy]", map.CustomerHierarchyUniqueName, StringComparison.OrdinalIgnoreCase);
+            }
             if (!string.IsNullOrWhiteSpace(map.StoreHierarchyUniqueName))
+            {
                 rewritten = rewritten.Replace("[Dim Cua Hang].[Ma CH]", map.StoreHierarchyUniqueName, StringComparison.OrdinalIgnoreCase);
+                rewritten = rewritten.Replace("[Dim Cua Hang].[Hierarchy]", map.StoreHierarchyUniqueName, StringComparison.OrdinalIgnoreCase);
+                rewritten = rewritten.Replace("[Dim Dia Diem].[Hierarchy]", map.StoreHierarchyUniqueName, StringComparison.OrdinalIgnoreCase);
+            }
 
             return rewritten;
         }

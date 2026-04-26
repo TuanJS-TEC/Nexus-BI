@@ -2,17 +2,7 @@
   <div class="chart-container glass-card">
     <div class="chart-header">
       <h3 class="chart-title">Biểu Đồ</h3>
-      <div class="chart-controls">
-        <button
-          v-for="t in chartTypes"
-          :key="t.type"
-          class="chart-type-btn"
-          :class="{ active: activeType === t.type }"
-          @click="activeType = t.type"
-        >
-          {{ t.label }}
-        </button>
-      </div>
+      <div class="chart-auto-badge">Tự động: {{ autoChartLabel }}</div>
     </div>
 
     <div class="chart-loading" v-if="store.isLoading">
@@ -36,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { BarChart, LineChart, PieChart, HeatmapChart } from 'echarts/charts'
@@ -67,18 +57,6 @@ use([
 
 const store = useOlapStore()
 type ChartType = 'combo' | 'bar' | 'line' | 'area' | 'stacked' | 'pie' | 'donut' | 'heatmap'
-const activeType = ref<ChartType>('combo')
-
-const chartTypes = [
-  { type: 'combo' as const, label: 'Kết hợp' },
-  { type: 'bar' as const, label: 'Cột' },
-  { type: 'line' as const, label: 'Đường' },
-  { type: 'area' as const, label: 'Miền' },
-  { type: 'stacked' as const, label: 'Chồng lớp' },
-  { type: 'pie' as const, label: 'Tròn' },
-  { type: 'donut' as const, label: 'Donut' },
-  { type: 'heatmap' as const, label: 'Heatmap' },
-]
 
 const result = computed(() => store.resultData)
 
@@ -93,23 +71,215 @@ const chartUpdateOptions = {
 
 const chartRenderKey = computed(() => {
   const r = result.value
-  if (!r) return activeType.value
+  if (!r) return autoChartType.value
   return [
-    activeType.value,
+    autoChartType.value,
     r.Columns.join('|'),
     r.Rows.length,
   ].join('::')
 })
+
+function isCustomerDimensionActive(): boolean {
+  return store.activeDimension === 'KhachHang'
+}
+
+function isInventoryLocationScenario(): boolean {
+  return store.currentFact === 'TonKho' && store.activeDimension === 'DiaDiem'
+}
+
+const autoChartType = computed<ChartType>(() => {
+  const r = result.value
+  if (!r?.Success || !r.Rows.length) return 'bar'
+
+  const measureCols = r.Columns.filter(col => isMeasureColumn(col, r.Rows))
+  const dimensionCols = r.Columns.filter(col => !measureCols.includes(col))
+  const dimensionDepth = dimensionCols.length
+
+  // Business rule: inventory + location should stay grouped bar in demo flow.
+  if (isInventoryLocationScenario()) return 'bar'
+  if (dimensionDepth >= 3) return 'heatmap'
+  if (dimensionDepth === 2) return 'bar'
+
+  // Business rule: customer drill view prefers horizontal bar for readability.
+  if (isCustomerDimensionActive()) return 'bar'
+
+  if (store.activeDimension === 'ThoiGian') {
+    // Time hierarchy is best represented as trend lines for Drill/Roll operations.
+    return 'line'
+  }
+
+  if (store.lastOperation === 'DefaultQuery' && measureCols.length > 1) return 'combo'
+  return 'bar'
+})
+
+const autoChartLabel = computed(() => {
+  const map: Record<ChartType, string> = {
+    combo: 'Kết hợp',
+    bar: 'Cột',
+    line: 'Đường',
+    area: 'Miền',
+    stacked: 'Chồng lớp',
+    pie: 'Tròn',
+    donut: 'Donut',
+    heatmap: 'Heatmap',
+  }
+  return map[autoChartType.value] ?? 'Cột'
+})
+
+const preferHorizontalBar = computed(() =>
+  autoChartType.value === 'bar' && isCustomerDimensionActive()
+)
+
+const isGroupedInventoryLocation = computed(() =>
+  isInventoryLocationScenario() && autoChartType.value === 'bar'
+)
+
+function isMeasureColumn(columnName: string, rows: Array<Record<string, unknown>>): boolean {
+  if (/\[MEASURES\]/i.test(columnName)) return true
+  if (/\[(DIM|HIERARCHY)\]|\[NAM\]|\[QUY\]|\[THANG\]|\[LOAI\s*KH\]|\[TEN\s*KH\]|\[BANG\]|\[TEN\s*TP\]|MEMBER_CAPTION/i.test(columnName)) {
+    return false
+  }
+  const sampleValues = rows
+    .map(row => row[columnName])
+    .filter(v => v !== null && v !== undefined)
+    .slice(0, 12)
+
+  if (!sampleValues.length) return false
+  return sampleValues.every(v => Number.isFinite(Number(v)))
+}
+
+function pickCategoryColumn(
+  dimensionCols: string[],
+  currentLevel: string | undefined
+): string | undefined {
+  if (!dimensionCols.length) return undefined
+  const level = String(currentLevel ?? '').toLowerCase()
+
+  if (level === 'nam') {
+    const yearCol = dimensionCols.find(c => /(\[nam\]|year|nam)/i.test(c))
+    if (yearCol) return yearCol
+  }
+  if (level === 'quy') {
+    const quarterCol = dimensionCols.find(c => /(\[quy\]|quarter|quy)/i.test(c))
+    if (quarterCol) return quarterCol
+  }
+  if (level === 'thang') {
+    const monthCol = dimensionCols.find(c => /(\[thang\]|month|thang)/i.test(c))
+    if (monthCol) return monthCol
+  }
+  if (level === 'loaikh') {
+    const customerTypeCol = dimensionCols.find(c => /(\[loai\s*kh\]|loaikh|customer\s*type)/i.test(c))
+    if (customerTypeCol) return customerTypeCol
+  }
+  if (level === 'tenkh') {
+    const customerNameCol = dimensionCols.find(c => /(\[ten\s*kh\]|tenkh|customer\s*name)/i.test(c))
+    if (customerNameCol) return customerNameCol
+  }
+  if (level === 'bang') {
+    const stateCol = dimensionCols.find(c => /(\[bang\]|state)/i.test(c))
+    if (stateCol) return stateCol
+  }
+  if (level === 'thanhpho') {
+    const cityCol = dimensionCols.find(c => /(\[ten\s*tp\]|thanhpho|city)/i.test(c))
+    if (cityCol) return cityCol
+  }
+
+  const fallbackByDepth = [
+    dimensionCols.find(c => /\[thang\]|month/i.test(c)),
+    dimensionCols.find(c => /\[quy\]|quarter/i.test(c)),
+    dimensionCols.find(c => /\[nam\]|year/i.test(c)),
+  ].find(Boolean)
+  return fallbackByDepth ?? dimensionCols[dimensionCols.length - 1]
+}
+
+function formatLevelLabel(rawValue: unknown, currentLevel: string | undefined): string {
+  const raw = String(rawValue ?? '').trim()
+  if (!raw) return raw
+  const level = String(currentLevel ?? '').toLowerCase()
+
+  if (level === 'quy') {
+    const q = Number(raw)
+    if (Number.isFinite(q) && q >= 1 && q <= 4) return `Quý ${q}`
+    if (/^q(uy)?\s*[1-4]$/i.test(raw)) return raw.replace(/^q(uy)?\s*/i, 'Quý ')
+    const simpleQuarter = raw.match(/\b([1-4])\b/)
+    if (simpleQuarter) return `Quý ${simpleQuarter[1]}`
+  }
+
+  if (level === 'thang') {
+    const m = Number(raw)
+    if (Number.isFinite(m) && m >= 1 && m <= 12) return `Tháng ${m}`
+    if (/^thang\s+\d{1,2}$/i.test(raw)) return raw.replace(/^thang/i, 'Tháng')
+  }
+
+  return raw
+}
+
+function normalizeDimensionLabel(rawValue: unknown, column: string): string {
+  const raw = String(rawValue ?? '').trim()
+  if (!raw) return 'N/A'
+  if (/\[quy\]/i.test(column)) {
+    const q = Number(raw)
+    if (Number.isFinite(q) && q >= 1 && q <= 4) return `Quý ${q}`
+  }
+  if (/\[thang\]/i.test(column)) {
+    const m = Number(raw)
+    if (Number.isFinite(m) && m >= 1 && m <= 12) return `Tháng ${m}`
+  }
+  return raw
+}
+
+function collectNumericValues(rows: Array<Record<string, unknown>>, measureCols: string[]): number[] {
+  const values: number[] = []
+  rows.forEach((row) => {
+    measureCols.forEach((measure) => {
+      const n = Number(row[measure])
+      if (Number.isFinite(n)) values.push(n)
+    })
+  })
+  return values
+}
+
+function computeSpreadRatio(values: number[]): number {
+  if (!values.length) return 1
+  const absValues = values.map(v => Math.abs(v)).filter(v => v > 0)
+  if (!absValues.length) return 1
+  const min = Math.min(...absValues)
+  const max = Math.max(...absValues)
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0) return 1
+  return max / min
+}
+
+function buildCategoryDataZoom(axis: 'x' | 'y', enabled: boolean) {
+  if (!enabled) return []
+  if (axis === 'x') {
+    return [
+      { type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: true, moveOnMouseMove: true },
+      { type: 'slider', xAxisIndex: 0, bottom: 30, height: 18, filterMode: 'none' },
+    ]
+  }
+  return [
+    { type: 'inside', yAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: true, moveOnMouseMove: true },
+    { type: 'slider', yAxisIndex: 0, right: 8, width: 14, filterMode: 'none' },
+  ]
+}
 
 const chartOption = computed(() => {
   if (!hasData.value || !result.value) return {}
 
   const rows = result.value.Rows
   const cols = result.value.Columns
-  const dimCol = cols[0] // first col is dimension
-  const measureCols = cols.slice(1)
+  const measureCols = cols.filter(col => isMeasureColumn(col, rows))
+  const dimensionCols = cols.filter(col => !measureCols.includes(col))
+  const categoryCol = pickCategoryColumn(dimensionCols, store.currentLevel)
+    ?? dimensionCols[0]
+    ?? cols[0]
+  const secondDimensionCol = dimensionCols.find(col => col !== categoryCol)
+  const thirdDimensionCol = dimensionCols.find(col => col !== categoryCol && col !== secondDimensionCol)
 
-  const categories = rows.map(r => String(r[dimCol] ?? ''))
+  const categoriesRaw = rows.map(r => String(r[categoryCol] ?? '').trim())
+  const categories = categoriesRaw.map((value, index) =>
+    formatLevelLabel(value || `Member ${index + 1}`, store.currentLevel)
+  )
   const hasQuantitySeries = measureCols.some(col =>
     col.toLowerCase().includes('so luong')
   )
@@ -118,9 +288,9 @@ const chartOption = computed(() => {
   const palette = ['#5B7E3C', '#A2CB8B', '#E8F5BD', '#C44545', '#468432', '#9AD872']
 
   const resolveSeriesType = (columnName: string): 'bar' | 'line' => {
-    if (activeType.value === 'bar' || activeType.value === 'line') return activeType.value
-    if (activeType.value === 'area') return 'line'
-    if (activeType.value === 'stacked') return 'bar'
+    if (autoChartType.value === 'bar' || autoChartType.value === 'line') return autoChartType.value
+    if (autoChartType.value === 'area') return 'line'
+    if (autoChartType.value === 'stacked') return 'bar'
     return columnName.toLowerCase().includes('so luong') ? 'bar' : 'line'
   }
 
@@ -139,11 +309,138 @@ const chartOption = computed(() => {
     .map(item => item.col)
 
   const hiddenSeriesCount = Math.max(0, measureCols.length - displayMeasureCols.length)
+  const valueSpread = computeSpreadRatio(collectNumericValues(rows, displayMeasureCols.length ? displayMeasureCols : measureCols))
+  const shouldEnableDetailZoom = categories.length > 12 || hiddenSeriesCount > 0 || valueSpread >= 25
+
+  // Multi-dimensional mode: represent 2D/3D explicitly when row-set includes >= 2 dimensions.
+  if (categoryCol && secondDimensionCol) {
+    const mainMeasure = displayMeasureCols[0] ?? measureCols[0]
+    if (!mainMeasure) return {}
+    const xCategories = [...new Set(rows.map(r => normalizeDimensionLabel(r[categoryCol], categoryCol)))]
+    const yGroups = [...new Set(rows.map(r => {
+      const secondLabel = normalizeDimensionLabel(r[secondDimensionCol], secondDimensionCol)
+      if (!thirdDimensionCol) return secondLabel
+      const thirdLabel = normalizeDimensionLabel(r[thirdDimensionCol], thirdDimensionCol)
+      return `${secondLabel} • ${thirdLabel}`
+    }))]
+
+    if (autoChartType.value === 'heatmap' && !isGroupedInventoryLocation.value) {
+      const matrix = new Map<string, number>()
+      rows.forEach(row => {
+        const x = normalizeDimensionLabel(row[categoryCol], categoryCol)
+        const secondLabel = normalizeDimensionLabel(row[secondDimensionCol], secondDimensionCol)
+        const keyY = thirdDimensionCol
+          ? `${secondLabel} • ${normalizeDimensionLabel(row[thirdDimensionCol], thirdDimensionCol)}`
+          : secondLabel
+        const value = Number(row[mainMeasure] ?? 0)
+        if (Number.isFinite(value)) matrix.set(`${x}__${keyY}`, value)
+      })
+      const heatData: Array<[number, number, number]> = []
+      let min = Number.POSITIVE_INFINITY
+      let max = Number.NEGATIVE_INFINITY
+      yGroups.forEach((group, rowIdx) => {
+        xCategories.forEach((cat, colIdx) => {
+          const value = matrix.get(`${cat}__${group}`) ?? 0
+          min = Math.min(min, value)
+          max = Math.max(max, value)
+          heatData.push([colIdx, rowIdx, value])
+        })
+      })
+
+      return {
+        backgroundColor: 'transparent',
+        title: {
+          text: `Biểu diễn heatmap ${thirdDimensionCol ? '3D' : '2D'} theo ${mainMeasure}`,
+          left: 12,
+          top: 8,
+          textStyle: { fontSize: 12, fontWeight: 600, color: '#475569' },
+        },
+        tooltip: {
+          position: 'top',
+          formatter: (params: { data: [number, number, number] }) => {
+            const [x, y, v] = params.data
+            return `${xCategories[x]}<br/>${yGroups[y]}<br/><strong>${mainMeasure}: ${v.toLocaleString('vi-VN')}</strong>`
+          },
+        },
+        grid: { top: 34, left: 120, right: 16, bottom: 28, containLabel: true },
+        xAxis: { type: 'category', data: xCategories, axisLabel: { color: '#64748b', fontSize: 11 } },
+        yAxis: { type: 'category', data: yGroups, axisLabel: { color: '#64748b', fontSize: 11 } },
+        visualMap: {
+          min: Number.isFinite(min) ? min : 0,
+          max: Number.isFinite(max) ? max : 0,
+          calculable: true,
+          orient: 'horizontal',
+          left: 'center',
+          bottom: -2,
+          textStyle: { color: '#64748b' },
+          inRange: { color: ['#E8F5BD', '#A2CB8B', '#5B7E3C', '#468432'] },
+        },
+        dataZoom: [
+          ...buildCategoryDataZoom('x', xCategories.length > 10 || yGroups.length > 8),
+          ...buildCategoryDataZoom('y', yGroups.length > 10),
+        ],
+        series: [{ type: 'heatmap', data: heatData, label: { show: false } }],
+      }
+    }
+
+    const groupedData = new Map<string, number[]>()
+    yGroups.forEach(group => groupedData.set(group, Array(xCategories.length).fill(0)))
+    rows.forEach(row => {
+      const x = normalizeDimensionLabel(row[categoryCol], categoryCol)
+      const y = normalizeDimensionLabel(row[secondDimensionCol], secondDimensionCol)
+      const value = Number(row[mainMeasure] ?? 0)
+      const xIndex = xCategories.indexOf(x)
+      if (xIndex < 0 || !Number.isFinite(value)) return
+      groupedData.get(y)![xIndex] = value
+    })
+
+    return {
+      backgroundColor: 'transparent',
+      title: {
+        text: `Biểu diễn ${thirdDimensionCol ? '3D' : '2D'} theo ${mainMeasure}`,
+        left: 12,
+        top: 8,
+        textStyle: { fontSize: 12, fontWeight: 600, color: '#475569' },
+      },
+      tooltip: { trigger: 'axis' },
+      legend: { type: 'scroll', bottom: 0, textStyle: { color: '#94a3b8' } },
+      grid: { top: 36, right: 20, bottom: 60, left: 80, containLabel: true },
+      xAxis: preferHorizontalBar.value
+        ? {
+            type: 'value',
+            axisLabel: {
+              color: '#64748b',
+              formatter: (val: number) => val.toLocaleString('vi-VN'),
+            },
+          }
+        : { type: 'category', data: xCategories, axisLabel: { color: '#64748b', fontSize: 11 } },
+      yAxis: preferHorizontalBar.value
+        ? { type: 'category', data: xCategories, axisLabel: { color: '#64748b', fontSize: 11 } }
+        : {
+        type: 'value',
+        axisLabel: {
+          color: '#64748b',
+          formatter: (val: number) => val.toLocaleString('vi-VN'),
+        },
+      },
+      series: yGroups.map((group, i) => ({
+        name: group,
+        type: autoChartType.value === 'line' ? 'line' : 'bar',
+        data: groupedData.get(group) ?? [],
+        itemStyle: { color: palette[i % palette.length] },
+        smooth: autoChartType.value === 'line',
+      })),
+      dataZoom: buildCategoryDataZoom(
+        preferHorizontalBar.value ? 'y' : 'x',
+        xCategories.length > 10 || yGroups.length > 8 || shouldEnableDetailZoom
+      ),
+    }
+  }
 
   const series = displayMeasureCols.map((col, i) => {
     const chartType = resolveSeriesType(col)
-    const isArea = activeType.value === 'area'
-    const isStacked = activeType.value === 'stacked'
+    const isArea = autoChartType.value === 'area'
+    const isStacked = autoChartType.value === 'stacked'
     return {
       name: col,
       type: chartType,
@@ -158,19 +455,19 @@ const chartOption = computed(() => {
       lineStyle: chartType === 'line'
         ? { width: 2, color: palette[i % palette.length] }
         : undefined,
-      areaStyle: chartType === 'line' && (isArea || activeType.value === 'combo')
+      areaStyle: chartType === 'line' && (isArea || autoChartType.value === 'combo')
         ? { color: palette[i % palette.length], opacity: isArea ? 0.18 : 0.08 }
         : undefined,
     }
   })
 
   // Pie/Donut: suitable for comparing category contributions on a selected measure.
-  if (activeType.value === 'pie' || activeType.value === 'donut') {
+  if (autoChartType.value === 'pie' || autoChartType.value === 'donut') {
     const pieMeasure = displayMeasureCols[0] ?? measureCols[0]
     if (!pieMeasure) return {}
     const pieValues = rows
-      .map(r => ({
-        name: String(r[dimCol] ?? ''),
+      .map((r, idx) => ({
+        name: categories[idx] ?? String(r[categoryCol] ?? ''),
         value: Number(r[pieMeasure] ?? 0),
       }))
       .filter(p => Number.isFinite(p.value))
@@ -206,7 +503,7 @@ const chartOption = computed(() => {
         {
           name: pieMeasure,
           type: 'pie',
-          radius: activeType.value === 'donut' ? ['42%', '68%'] : '66%',
+          radius: autoChartType.value === 'donut' ? ['42%', '68%'] : '66%',
           center: ['40%', '54%'],
           data,
           label: { formatter: '{b}: {d}%', color: '#475569', fontSize: 11 },
@@ -223,7 +520,7 @@ const chartOption = computed(() => {
   }
 
   // Heatmap matrix: dimension members vs measure columns.
-  if (activeType.value === 'heatmap') {
+  if (autoChartType.value === 'heatmap') {
     const xLabels = displayMeasureCols.length ? displayMeasureCols : measureCols
     if (!xLabels.length) return {}
     const yLabels = categories
@@ -282,6 +579,47 @@ const chartOption = computed(() => {
           emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 1 } },
         },
       ],
+    }
+  }
+
+  if (preferHorizontalBar.value) {
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+      },
+      legend: {
+        type: 'scroll',
+        textStyle: { color: '#94a3b8' },
+        bottom: 0,
+      },
+      grid: { top: 20, right: 20, bottom: 60, left: 120, containLabel: true },
+      xAxis: {
+        type: 'value',
+        axisLabel: {
+          color: '#64748b',
+          formatter: (val: number) =>
+            val >= 1_000_000 ? (val / 1_000_000).toFixed(1) + 'Tr' : val.toLocaleString('vi-VN'),
+        },
+        splitLine: { lineStyle: { color: '#1e293b' } },
+      },
+      yAxis: {
+        type: 'category',
+        data: categories,
+        axisLine: { lineStyle: { color: '#334155' } },
+        axisLabel: { color: '#64748b', fontSize: 11 },
+      },
+      dataZoom: buildCategoryDataZoom('y', shouldEnableDetailZoom || categories.length > 10),
+      series: displayMeasureCols.map((col, i) => ({
+        name: col,
+        type: 'bar',
+        data: rows.map(r => {
+          const v = r[col]
+          return v === null || v === undefined ? null : Number(v)
+        }),
+        itemStyle: { color: palette[i % palette.length] },
+      })),
     }
   }
 
@@ -367,21 +705,53 @@ const chartOption = computed(() => {
           ],
         }
       : {}),
-    dataZoom: categories.length > 20
-      ? [{ type: 'inside' }, { type: 'slider', bottom: 30, height: 20 }]
-      : [],
+    dataZoom: buildCategoryDataZoom('x', shouldEnableDetailZoom || categories.length > 14),
     series,
   }
 })
 
-async function onChartClick(params: { name?: string }) {
+function extractMeasureFromSeriesName(seriesName: string): string {
+  const raw = String(seriesName ?? '').trim()
+  if (!raw) return ''
+  const match = raw.match(/\[MEASURES\]\.\[([^\]]+)\]/i)
+  if (match?.[1]) return match[1].trim()
+  const normalized = raw.replace(/\[|\]/g, '').trim()
+  const knownMeasures = store.selectedCubeInfo?.Measures ?? []
+  return knownMeasures.includes(normalized) ? normalized : ''
+}
+
+type ChartClickParams = {
+  name?: string
+  dataIndex?: number
+  seriesName?: string
+  componentType?: string
+}
+
+async function onChartClick(params: ChartClickParams) {
+  const clickedMeasure = extractMeasureFromSeriesName(String(params?.seriesName ?? ''))
+  if (clickedMeasure) {
+    // Clicking a series/legend first should lock the query scope to that measure.
+    store.setSelectedMeasure(clickedMeasure)
+    store.includeSoLuong = false
+  }
+
+  // Drill only when user clicks a concrete data point carrying category context.
+  if (params?.componentType !== 'series' || typeof params?.dataIndex !== 'number') return
   const member = String(params?.name ?? '').trim()
   if (!member || store.isLoading) return
-  if (store.canDrillDown) {
-    await store.drillByMember(member)
-    return
-  }
-  store.setContextByMember(member)
+  const row = typeof params?.dataIndex === 'number'
+    ? result.value?.Rows?.[params.dataIndex]
+    : undefined
+  const chartRows = result.value?.Rows ?? []
+  const chartCols = result.value?.Columns ?? []
+  const chartMeasureCols = chartCols.filter(col => isMeasureColumn(col, chartRows))
+  const chartDimensionCols = chartCols.filter(col => !chartMeasureCols.includes(col))
+  const rowHints = row
+    ? chartDimensionCols
+        .map(col => String(row[col] ?? '').trim())
+        .filter(Boolean)
+    : []
+  store.setContextByMember(member, rowHints)
 }
 </script>
 

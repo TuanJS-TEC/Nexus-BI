@@ -1,11 +1,19 @@
 export interface OlapRequest {
   Cube?: string
   Measure?: string
+  ActiveDimension?: 'ThoiGian' | 'KhachHang' | 'DiaDiem'
+  ActiveDimensions?: Array<'ThoiGian' | 'KhachHang' | 'DiaDiem' | 'MatHang'>
+  DimensionLevels?: Partial<Record<'ThoiGian' | 'KhachHang' | 'DiaDiem' | 'MatHang', string>>
   ProductKey?: string
   CustomerKey?: string
+  CustomerType?: string
+  CustomerName?: string
   StoreKey?: string
+  State?: string
+  City?: string
   Year?: number
   Quarter?: number
+  Month?: number
   RowLevel?: string
   ColLevel?: string
   IncludeSoLuong?: boolean
@@ -60,4 +68,10 @@ export interface CubeInfo {
   Measures: string[]
   Description: string
   Capabilities: CubeCapabilities
+}
+
+export interface CubeMappingItem {
+  cube: string
+  fact: 'BanHang' | 'TonKho'
+  dimensions: string[]
 }

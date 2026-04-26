@@ -12,21 +12,46 @@
       <div class="sidebar-section">
         <h3 class="section-title">Điều hướng trực tiếp</h3>
         <p class="nav-guide">Click vào một member trên biểu đồ hoặc bảng để drill xuống cấp chi tiết tiếp theo.</p>
-        <p class="nav-guide">Ví dụ: chọn năm 2024 để xuống Quý, chọn Quý để xuống Tháng. Nút Roll Up đưa dữ liệu về cấp cha.</p>
+        <p class="nav-guide">Hỗ trợ 3 hierarchy: Thời Gian (Năm→Quý→Tháng), Khách Hàng (Loại KH→Tên KH), Địa Điểm (Bang→Thành phố).</p>
       </div>
 
       <div class="sidebar-section metadata">
         <h3 class="section-title">Metadata</h3>
         <details open>
-          <summary>Cubes</summary>
+          <summary>Bảng dữ liệu</summary>
           <ul>
-            <li v-for="cube in store.metadata?.Cubes ?? []" :key="cube">{{ cube }}</li>
+            <li>
+              <button
+                class="cube-item"
+                :class="{ active: store.currentFact === 'BanHang' }"
+                @click="store.selectFact('BanHang')"
+              >
+                Bán Hàng
+              </button>
+            </li>
+            <li>
+              <button
+                class="cube-item"
+                :class="{ active: store.currentFact === 'TonKho' }"
+                @click="store.selectFact('TonKho')"
+              >
+                Tồn Kho
+              </button>
+            </li>
           </ul>
         </details>
         <details open>
           <summary>Measures</summary>
           <ul>
-            <li v-for="measure in store.metadata?.Measures ?? []" :key="measure">{{ measure }}</li>
+            <li v-for="measure in store.metadata?.Measures ?? []" :key="measure">
+              <button
+                class="measure-item"
+                :class="{ active: store.selectedMeasure === measure }"
+                @click="onSelectMeasure(measure)"
+              >
+                {{ measure }}
+              </button>
+            </li>
           </ul>
         </details>
       </div>
@@ -39,9 +64,12 @@
 
     <main class="content-area">
       <header class="top-bar">
-        <div class="breadcrumb">Workspace / Sales Analysis / {{ store.selectedCube }}</div>
+        <div class="top-left">
+          <button class="util-btn util-btn-home" @click="onGoHome">Home</button>
+          <div class="breadcrumb">Workspace / Sales Analysis / {{ store.selectedCube }}</div>
+        </div>
         <div class="top-actions">
-          <ActionButtons compact />
+          <ActionButtons />
           <div class="utility-bar">
             <div class="density-toggle">
               <button :class="{ active: store.tableDensity === 'compact' }" @click="store.tableDensity = 'compact'">Compact</button>
@@ -76,10 +104,10 @@
         </details>
 
         <div class="data-grid">
-          <div class="shadow-card">
+          <div class="shadow-card overview-card">
             <OlapChart />
           </div>
-          <div class="shadow-card">
+          <div class="shadow-card table-card">
             <OlapTable />
           </div>
         </div>
@@ -91,14 +119,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import ActionButtons from '@/components/ActionButtons.vue'
-import OlapTable from '@/components/OlapTable.vue'
 import OlapChart from '@/components/OlapChart.vue'
+import OlapTable from '@/components/OlapTable.vue'
 import { useOlapStore } from '@/stores/olapStore'
 
 const store = useOlapStore()
 const isConnected = ref(false)
-
 onMounted(async () => {
+  await store.loadCubeMappings()
   await store.loadMetadata()
   isConnected.value = !!store.metadata
   if (!store.resultData) {
@@ -125,6 +153,15 @@ const successMessage = computed(() => {
   if (store.isLoading || store.errorMessage || !store.lastOperation || !store.resultData?.Success) return ''
   return `Nạp dữ liệu thành công: ${store.lastOperation} (${store.resultData.Rows.length} dòng).`
 })
+
+async function onSelectMeasure(measure: string) {
+  if (!measure || store.selectedMeasure === measure) return
+  store.setSelectedMeasure(measure)
+}
+
+async function onGoHome() {
+  await store.goHomeDashboard()
+}
 
 function exportCsv() {
   const result = store.resultData
@@ -162,7 +199,7 @@ function exportPdf() {
 }
 
 .sidebar {
-  width: 340px;
+  width: 260px;
   background: var(--sidebar-bg);
   color: var(--text-on-dark);
   border-right: 1px solid rgba(154, 216, 114, 0.22);
@@ -251,6 +288,54 @@ function exportPdf() {
   color: var(--color-interaction-active);
 }
 
+.cube-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 0.2rem 0.35rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cube-item:hover {
+  border-color: color-mix(in srgb, var(--color-interaction-active) 35%, transparent);
+  color: var(--color-interaction-active);
+}
+
+.cube-item.active {
+  border-color: color-mix(in srgb, var(--color-interaction-active) 45%, var(--color-brand-primary));
+  background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+  color: var(--text-on-dark);
+  font-weight: 600;
+}
+
+.measure-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 0.2rem 0.35rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.measure-item:hover {
+  border-color: color-mix(in srgb, var(--color-interaction-active) 35%, transparent);
+  color: var(--color-interaction-active);
+}
+
+.measure-item.active {
+  border-color: color-mix(in srgb, var(--color-interaction-active) 45%, var(--color-brand-primary));
+  background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+  color: var(--text-on-dark);
+  font-weight: 600;
+}
+
 .connection-status {
   margin-top: auto;
   display: flex;
@@ -292,6 +377,12 @@ function exportPdf() {
 .breadcrumb {
   font-size: 0.78rem;
   color: color-mix(in srgb, var(--text-on-brand) 82%, #000000);
+}
+
+.top-left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
 .top-actions {
@@ -346,6 +437,21 @@ function exportPdf() {
 }
 
 .util-btn-primary:hover {
+  background: var(--color-brand-primary-hover);
+  border-color: var(--color-brand-primary-hover);
+}
+
+.util-btn-home {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.5rem 0.95rem;
+  font-size: 0.82rem;
+  min-width: 86px;
+}
+
+.util-btn-home:hover {
   background: var(--color-brand-primary-hover);
   border-color: var(--color-brand-primary-hover);
 }
@@ -442,8 +548,12 @@ function exportPdf() {
 
 .data-grid {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr);
+  grid-template-columns: 1fr;
   gap: 1rem;
+}
+
+.table-card {
+  grid-column: 1 / -1;
 }
 
 .shadow-card {
@@ -475,7 +585,7 @@ function exportPdf() {
 
 @media (max-width: 1280px) {
   .sidebar {
-    width: 300px;
+    width: 230px;
   }
   .top-actions {
     flex-direction: column;
@@ -511,6 +621,9 @@ function exportPdf() {
   }
   .utility-bar {
     flex-wrap: wrap;
+  }
+  .data-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

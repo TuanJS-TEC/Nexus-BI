@@ -1,19 +1,35 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { olapApi } from '@/api/olap'
-import type { OlapRequest, OlapResult, MetadataResult, CubeInfo } from '@/types/olap'
+import type { OlapRequest, OlapResult, MetadataResult, CubeInfo, CubeMappingItem } from '@/types/olap'
 
-export type OlapLevel = 'Nam' | 'Quy' | 'Thang'
-export type OperationType = '' | 'DrillDown' | 'RollUp' | 'Slice' | 'Dice' | 'Pivot' | 'DefaultQuery'
-export type SafeOperationType = Exclude<OperationType, '' | 'DefaultQuery'>
-export type RiskLevel = 'low' | 'medium' | 'high'
+export type DrillDimension = 'ThoiGian' | 'KhachHang' | 'DiaDiem'
+export type AnalyticalDimension = DrillDimension | 'MatHang'
+export type TimeLevel = 'Nam' | 'Quy' | 'Thang'
+export type CustomerLevel = 'LoaiKH' | 'TenKH'
+export type LocationLevel = 'Bang' | 'ThanhPho'
+export type OperationType = '' | 'DrillDown' | 'RollUp' | 'DefaultQuery' | 'Query'
+export type FactType = 'BanHang' | 'TonKho'
+const HOME_CUBE = 'Cube4BanHang_3D_KH_MH_TG_01'
+const DIMENSION_TOKEN: Record<AnalyticalDimension, string> = {
+  ThoiGian: 'TG',
+  KhachHang: 'KH',
+  DiaDiem: 'CH',
+  MatHang: 'MH',
+}
+const FACT_DEFAULTS: Record<FactType, { cube: string; measure: string; includeSoLuong: boolean }> = {
+  BanHang: { cube: 'Cube4BanHang_3D_KH_MH_TG_01', measure: 'Tong Tien', includeSoLuong: true },
+  TonKho: { cube: 'Cube4TonKho_3D_MH_CH_TG_01', measure: 'So Luong Trong Kho', includeSoLuong: false },
+}
+const FACT_DIMENSION_DEFAULTS: Record<FactType, AnalyticalDimension[]> = {
+  BanHang: ['ThoiGian', 'KhachHang', 'MatHang'],
+  TonKho: ['ThoiGian', 'DiaDiem', 'MatHang'],
+}
 
-export interface OperationGuard {
-  enabled: boolean
-  reason?: string
-  warnings: string[]
-  requiresConfirm: boolean
-  risk: RiskLevel
+type LevelState = {
+  ThoiGian: TimeLevel
+  KhachHang: CustomerLevel
+  DiaDiem: LocationLevel
 }
 
 function parseCubeNameLocally(cubeName: string): CubeInfo {
@@ -56,9 +72,34 @@ function parseCubeNameLocally(cubeName: string): CubeInfo {
 interface DrillContext {
   year?: number
   quarter?: number
+  month?: number
   productKey?: string
   customerKey?: string
   storeKey?: string
+  customerType?: string
+  customerName?: string
+  state?: string
+  city?: string
+}
+
+const REQUEST_TIMEOUT_MS = 25_000
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`Request timeout sau ${Math.round(timeoutMs / 1000)} giay`))
+    }, timeoutMs)
+
+    promise
+      .then((value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      })
+      .catch((error) => {
+        window.clearTimeout(timer)
+        reject(error)
+      })
+  })
 }
 
 function parseYear(text: string): number | undefined {
@@ -69,7 +110,11 @@ function parseYear(text: string): number | undefined {
 }
 
 function parseQuarter(text: string): number | undefined {
-  const normalized = text.trim().toUpperCase()
+  const normalized = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
 
   // Match common numeric formats: "Q1", "Quy 1", "Quarter 1", "&[1]"
   const numericMatch = normalized.match(/(?:\bQ(?:U?Y|UARTER)?\s*|&\[)([1-4])(?:\b|\])/)
@@ -88,7 +133,40 @@ function parseQuarter(text: string): number | undefined {
     if (roman === 'IV') return 4
   }
 
+  // Fallback for plain labels like "1", "Quy-2", "Q_3 (2025)"
+  const looseNumeric = normalized.match(/\b([1-4])\b/)
+  if (looseNumeric) {
+    const q = Number(looseNumeric[1])
+    if (Number.isFinite(q)) return q
+  }
+
   return undefined
+}
+
+function parseMonth(text: string): number | undefined {
+  const normalized = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+
+  const monthMatch = normalized.match(/(?:\bTHANG\s*|MONTH\s*|&\[)(1[0-2]|[1-9])(?:\b|\])/)
+  if (monthMatch) {
+    const month = Number(monthMatch[1])
+    if (Number.isFinite(month)) return month
+  }
+
+  const looseNumeric = normalized.match(/\b(1[0-2]|[1-9])\b/)
+  if (looseNumeric) {
+    const month = Number(looseNumeric[1])
+    if (Number.isFinite(month)) return month
+  }
+
+  return undefined
+}
+
+function sanitizeCandidate(value: unknown): string {
+  return String(value ?? '').trim()
 }
 
 function extractMemberCode(text: string): string {
@@ -96,11 +174,26 @@ function extractMemberCode(text: string): string {
   return match?.[1]?.toUpperCase() ?? text.trim()
 }
 
+function looksLikePureTimeToken(value: string): boolean {
+  const normalized = value.trim()
+  if (!normalized) return false
+  if (/^\d{4}$/.test(normalized)) return true
+  if (/^(q|quy|quarter)\s*[1-4]$/i.test(normalized)) return true
+  if (/^[1-4]$/.test(normalized)) return true
+  return false
+}
+
 export const useOlapStore = defineStore('olap', () => {
-  const currentLevel = ref<OlapLevel>('Nam')
+  const activeDimension = ref<DrillDimension>('ThoiGian')
+  const levelByDimension = ref<LevelState>({
+    ThoiGian: 'Nam',
+    KhachHang: 'LoaiKH',
+    DiaDiem: 'Bang',
+  })
   const rowAxis = ref('Nam')
   const colAxis = ref('Ma MH')
   const selectedCube = ref('Cube4BanHang_3D_KH_MH_TG_01')
+  const activeDimensions = ref<AnalyticalDimension[]>(['ThoiGian', 'KhachHang', 'MatHang'])
   const selectedMeasure = ref('Tong Tien')
   const includeSoLuong = ref(true)
 
@@ -112,19 +205,41 @@ export const useOlapStore = defineStore('olap', () => {
   const isLoading = ref(false)
   const lastOperation = ref<OperationType>('')
   const errorMessage = ref('')
-  const pendingOperation = ref<SafeOperationType | null>(null)
-  const pendingWarning = ref('')
-  const pendingRisk = ref<RiskLevel>('low')
   const lastQueryMs = ref<number | null>(null)
   const lastResultAt = ref<Date | null>(null)
   const metadataLoadedAt = ref<Date | null>(null)
   const tableDensity = ref<'compact' | 'comfortable'>('compact')
+  const cubeMappings = ref<CubeMappingItem[]>([])
+  const pendingOverviewDimension = ref<DrillDimension | null>(null)
 
-  const canDrillDown = computed(() => currentLevel.value !== 'Thang')
-  const canRollUp = computed(() => currentLevel.value !== 'Nam')
+  const currentLevel = computed(() => levelByDimension.value[activeDimension.value])
+  const canDrillDown = computed(() => {
+    if (activeDimension.value === 'ThoiGian') return currentLevel.value !== 'Thang'
+    if (activeDimension.value === 'KhachHang') return currentLevel.value !== 'TenKH'
+    return currentLevel.value !== 'ThanhPho'
+  })
+  const canRollUp = computed(() => {
+    if (activeDimension.value === 'ThoiGian') return currentLevel.value !== 'Nam'
+    if (activeDimension.value === 'KhachHang') return currentLevel.value !== 'LoaiKH'
+    return currentLevel.value !== 'Bang'
+  })
   const selectedCubeInfo = computed<CubeInfo>(() => {
     const fromApi = metadata.value?.CubeInfos?.find(c => c.Name === selectedCube.value)
     return fromApi ?? parseCubeNameLocally(selectedCube.value)
+  })
+  const currentFact = computed<FactType>(() =>
+    selectedCubeInfo.value.Fact === 'Fact_TonKho' ? 'TonKho' : 'BanHang'
+  )
+  const factDimensionScope = computed<AnalyticalDimension[]>(() => {
+    const fact = currentFact.value
+    const source = cubeMappings.value
+      .filter(item => item.fact === fact)
+      .flatMap(item => item.dimensions)
+      .map(token => mapTokenToDimension(token))
+      .filter((d): d is AnalyticalDimension => !!d)
+
+    const unique = [...new Set(source)]
+    return unique.length ? unique : FACT_DIMENSION_DEFAULTS[fact]
   })
   const cubeHasTime = computed(() => selectedCubeInfo.value.Capabilities.HasTime)
   const cubeHasProduct = computed(() => selectedCubeInfo.value.Capabilities.HasProduct)
@@ -139,57 +254,74 @@ export const useOlapStore = defineStore('olap', () => {
     return list
   })
 
-  const canUseTimeOperations = computed(() => cubeHasTime.value)
-  const hasDimensionFilter = computed(() =>
-    !!drillContext.value.year ||
-    !!drillContext.value.productKey ||
-    !!drillContext.value.customerKey ||
-    !!drillContext.value.storeKey
-  )
-
-  const operationGuards = computed<Record<SafeOperationType, OperationGuard>>(() => {
-    const guards: Record<SafeOperationType, OperationGuard> = {
-      DrillDown: { enabled: true, warnings: [], requiresConfirm: false, risk: 'low' },
-      RollUp: { enabled: true, warnings: [], requiresConfirm: false, risk: 'low' },
-      Slice: { enabled: true, warnings: [], requiresConfirm: false, risk: 'low' },
-      Dice: { enabled: true, warnings: [], requiresConfirm: false, risk: 'low' },
-      Pivot: { enabled: true, warnings: [], requiresConfirm: false, risk: 'low' },
+  const hasDrillSelection = computed(() => {
+    if (activeDimension.value === 'ThoiGian') {
+      if (currentLevel.value === 'Nam') return Number.isFinite(drillContext.value.year)
+      if (currentLevel.value === 'Quy') return Number.isFinite(drillContext.value.quarter)
+      return true
     }
-
-    if (!selectedCubeInfo.value.Capabilities.AllowDrillDown) {
-      guards.DrillDown = { ...guards.DrillDown, enabled: false, reason: 'Cube hiện tại không hỗ trợ DrillDown (thiếu TG).', risk: 'high' }
+    if (activeDimension.value === 'KhachHang') {
+      if (currentLevel.value === 'LoaiKH') return !!String(drillContext.value.customerType ?? '').trim()
+      return true
     }
-    if (!selectedCubeInfo.value.Capabilities.AllowRollUp) {
-      guards.RollUp = { ...guards.RollUp, enabled: false, reason: 'Cube hiện tại không hỗ trợ RollUp (thiếu TG).', risk: 'high' }
-    }
-    if (!selectedCubeInfo.value.Capabilities.AllowSlice) {
-      guards.Slice = { ...guards.Slice, enabled: false, reason: 'Cube hiện tại không hỗ trợ Slice (thiếu TG).', risk: 'high' }
-    }
-    if (!selectedCubeInfo.value.Capabilities.AllowDice) {
-      guards.Dice = { ...guards.Dice, enabled: false, reason: 'Cube hiện tại không hỗ trợ Dice (thiếu TG).', risk: 'high' }
-    }
-    if (!selectedCubeInfo.value.Capabilities.AllowPivot) {
-      guards.Pivot = { ...guards.Pivot, enabled: false, reason: 'Cube hiện tại không hỗ trợ Pivot (thiếu TG).', risk: 'high' }
-    }
-
-    if (!canUseTimeOperations.value) return guards
-    if (!canDrillDown.value) guards.DrillDown = { ...guards.DrillDown, enabled: false, reason: 'Đang ở mức thấp nhất (Tháng).' }
-    if (!canRollUp.value) guards.RollUp = { ...guards.RollUp, enabled: false, reason: 'Đang ở mức cao nhất (Năm).' }
-    if (!drillContext.value.year) guards.Slice = { ...guards.Slice, enabled: false, reason: 'Slice cần chọn 1 năm trên biểu đồ/bảng trước.' }
-    if (!hasDimensionFilter.value) guards.Dice = { ...guards.Dice, enabled: false, reason: 'Dice cần ít nhất 1 ngữ cảnh đã click.' }
-    if (!drillContext.value.year) guards.Pivot = { ...guards.Pivot, enabled: false, reason: 'Pivot cần chọn Năm trước khi đổi trục.' }
-    return guards
+    if (currentLevel.value === 'Bang') return !!String(drillContext.value.state ?? '').trim()
+    return true
   })
 
+  const operationGuards = computed(() => {
+    const canUseDimension =
+      (activeDimension.value === 'ThoiGian' && cubeHasTime.value) ||
+      (activeDimension.value === 'KhachHang' && cubeHasCustomer.value) ||
+      (activeDimension.value === 'DiaDiem' && cubeHasStore.value)
+    return {
+      DrillDown: {
+        enabled: canUseDimension && canDrillDown.value && hasDrillSelection.value,
+        reason: !canUseDimension
+          ? 'Cube hiện tại không hỗ trợ chiều drill đang chọn.'
+          : (!canDrillDown.value
+              ? 'Đã ở mức thấp nhất của chiều.'
+              : (!hasDrillSelection.value ? 'Hãy chọn member trước khi drill down.' : '')),
+      },
+      RollUp: {
+        enabled: canUseDimension && canRollUp.value,
+        reason: !canUseDimension
+          ? 'Cube hiện tại không hỗ trợ chiều drill đang chọn.'
+          : (!canRollUp.value ? 'Đã ở mức cao nhất của chiều.' : ''),
+      },
+    }
+  })
+
+  const removableDimensions = computed(() =>
+    activeDimensions.value.filter(d => factDimensionScope.value.includes(d) && activeDimensions.value.length > 1)
+  )
+
+  const availableAddDimensions = computed(() =>
+    factDimensionScope.value.filter(d => !activeDimensions.value.includes(d) && canResolveCube([...activeDimensions.value, d], currentFact.value))
+  )
+
   function buildRequest(): OlapRequest {
+    const dimensionLevels: Partial<Record<AnalyticalDimension, string>> = {
+      ThoiGian: levelByDimension.value.ThoiGian,
+      KhachHang: levelByDimension.value.KhachHang,
+      DiaDiem: levelByDimension.value.DiaDiem,
+      MatHang: 'MaMH',
+    }
     return {
       Cube: selectedCube.value,
       Measure: selectedMeasure.value,
       ProductKey: drillContext.value.productKey,
       CustomerKey: drillContext.value.customerKey,
       StoreKey: drillContext.value.storeKey,
+      CustomerType: drillContext.value.customerType,
+      CustomerName: drillContext.value.customerName,
+      State: drillContext.value.state,
+      City: drillContext.value.city,
       Year: drillContext.value.year,
       Quarter: drillContext.value.quarter,
+      Month: drillContext.value.month,
+      ActiveDimension: activeDimension.value,
+      ActiveDimensions: [...activeDimensions.value],
+      DimensionLevels: dimensionLevels,
       RowLevel: currentLevel.value,
       ColLevel: colAxis.value,
       IncludeSoLuong: includeSoLuong.value,
@@ -201,7 +333,7 @@ export const useOlapStore = defineStore('olap', () => {
     errorMessage.value = ''
     const start = performance.now()
     try {
-      const res = await call()
+      const res = await withTimeout(call(), REQUEST_TIMEOUT_MS)
       if (res.Success) {
         resultData.value = res
         lastResultAt.value = new Date()
@@ -227,116 +359,234 @@ export const useOlapStore = defineStore('olap', () => {
       }
       const firstAxis = availablePivotAxes.value[0]
       colAxis.value = firstAxis ?? 'Thang'
+      syncActiveDimensionsFromCube()
     } catch (e) {
       console.error('Không thể tải metadata', e)
     }
   }
 
-  function clearPendingOperation() {
-    pendingOperation.value = null
-    pendingWarning.value = ''
-    pendingRisk.value = 'low'
+  function syncActiveDimensionsFromCube() {
+    const dims: AnalyticalDimension[] = []
+    if (selectedCubeInfo.value.Capabilities.HasTime) dims.push('ThoiGian')
+    if (selectedCubeInfo.value.Capabilities.HasCustomer) dims.push('KhachHang')
+    if (selectedCubeInfo.value.Capabilities.HasStore) dims.push('DiaDiem')
+    if (selectedCubeInfo.value.Capabilities.HasProduct) dims.push('MatHang')
+    if (dims.length) activeDimensions.value = dims
+    if (!activeDimensions.value.includes(activeDimension.value)) {
+      const firstDrill = activeDimensions.value.find(d => d !== 'MatHang')
+      if (firstDrill) activeDimension.value = firstDrill as DrillDimension
+    }
   }
 
-  function requestOperation(op: SafeOperationType): boolean {
+  async function loadCubeMappings() {
+    try {
+      cubeMappings.value = await olapApi.getCubeMappings()
+    } catch {
+      cubeMappings.value = []
+    }
+  }
+
+  function normalizeTokens(tokens: string[]) {
+    return [...new Set(tokens.map(t => t.trim().toUpperCase()).filter(Boolean))].sort()
+  }
+
+  function mapTokenToDimension(token: string): AnalyticalDimension | null {
+    const normalized = token.trim().toUpperCase()
+    if (normalized === 'TG') return 'ThoiGian'
+    if (normalized === 'KH') return 'KhachHang'
+    if (normalized === 'CH') return 'DiaDiem'
+    if (normalized === 'MH') return 'MatHang'
+    return null
+  }
+
+  function canResolveCube(dimensions: AnalyticalDimension[], fact: FactType): boolean {
+    return !!resolveCubeByDimensions(dimensions, fact)
+  }
+
+  function resolveCubeByDimensions(dimensions: AnalyticalDimension[], fact: FactType): string | null {
+    const expected = normalizeTokens(dimensions.map(d => DIMENSION_TOKEN[d]))
+    const fromBackend = cubeMappings.value
+      .filter(item => item.fact === fact)
+      .filter(item => {
+        const tokens = normalizeTokens(item.dimensions)
+        return tokens.length === expected.length && tokens.every((t, i) => t === expected[i])
+      })
+      .map(item => item.cube)
+
+    const fromMetadata = (metadata.value?.CubeInfos ?? [])
+      .filter(c => (fact === 'BanHang' ? c.Fact === 'Fact_BanHang' : c.Fact === 'Fact_TonKho'))
+      .filter(c => {
+        const tokens = normalizeTokens([
+          c.Capabilities.HasProduct ? 'MH' : '',
+          c.Capabilities.HasTime ? 'TG' : '',
+          c.Capabilities.HasCustomer ? 'KH' : '',
+          c.Capabilities.HasStore ? 'CH' : '',
+        ])
+        return tokens.length === expected.length && tokens.every((t, i) => t === expected[i])
+      })
+      .map(c => c.Name)
+
+    const candidates = [...new Set([...fromBackend, ...fromMetadata])]
+    if (!candidates.length) return null
+    const preferred = candidates.find(c => c.endsWith('_01'))
+    return preferred ?? candidates.sort((a, b) => a.localeCompare(b))[0]
+  }
+
+  async function syncCubeByDimensions(dimensions: AnalyticalDimension[] = activeDimensions.value) {
+    const resolved = resolveCubeByDimensions(dimensions, currentFact.value)
+    if (!resolved || resolved === selectedCube.value) return
+    cubeSwitchMode.value = 'preserve'
+    selectedCube.value = resolved
+  }
+
+  const cubeSwitchMode = ref<'default' | 'preserve'>('default')
+
+  async function queryCurrentView() {
+    await executeOperation(
+      () => olapApi.query(buildRequest()),
+      'Query',
+      () => {
+        selectedMemberLabel.value = ''
+      },
+    )
+  }
+
+  function requestOperation(op: 'DrillDown' | 'RollUp'): boolean {
     const guard = operationGuards.value[op]
     if (!guard.enabled) {
-      clearPendingOperation()
       errorMessage.value = guard.reason || 'Thao tác bị khóa.'
       return false
     }
-    if (guard.requiresConfirm) {
-      pendingOperation.value = op
-      pendingWarning.value = guard.warnings.join(' ')
-      pendingRisk.value = guard.risk
-      return false
-    }
-    clearPendingOperation()
     return true
   }
 
-  function setContextByMember(memberLabel: string) {
+  function setContextByMember(memberLabel: string, rowHints: Array<string | number> = []) {
     selectedMemberLabel.value = memberLabel
-    const normalized = String(memberLabel ?? '').trim()
-    if (!normalized) return
+    const normalized = sanitizeCandidate(memberLabel)
+    const hintValues = rowHints
+      .map(sanitizeCandidate)
+      .filter(Boolean)
+    const candidates = [normalized, ...hintValues]
+    if (!candidates.length) return
 
-    const year = parseYear(normalized)
-    if (currentLevel.value === 'Nam' && year) {
-      drillContext.value.year = year
-      drillContext.value.quarter = undefined
-      return
-    }
-    if (currentLevel.value === 'Quy') {
-      const q = parseQuarter(normalized)
-      if (q) {
-        drillContext.value.quarter = q
-      }
-      if (year) {
+    const firstYear = candidates
+      .map(parseYear)
+      .find((y): y is number => Number.isFinite(y))
+    const firstQuarter = candidates
+      .map(parseQuarter)
+      .find((q): q is number => Number.isFinite(q))
+
+    if (activeDimension.value === 'ThoiGian') {
+      const year = firstYear
+      if (currentLevel.value === 'Nam' && year) {
         drillContext.value.year = year
+        drillContext.value.quarter = undefined
+        drillContext.value.month = undefined
+        return
+      }
+      if (currentLevel.value === 'Quy') {
+        const q = firstQuarter
+        if (q) drillContext.value.quarter = q
+        if (year) drillContext.value.year = year
+        return
+      }
+      if (currentLevel.value === 'Thang') {
+        const m = candidates
+          .map(parseMonth)
+          .find((month): month is number => Number.isFinite(month))
+        if (m) drillContext.value.month = m
+        if (firstQuarter) drillContext.value.quarter = firstQuarter
+        if (year) drillContext.value.year = year
+        return
       }
       return
     }
+    if (activeDimension.value === 'KhachHang') {
+      const customerCandidate = candidates.find(c => !looksLikePureTimeToken(c))
+      if (!customerCandidate) return
+      if (currentLevel.value === 'LoaiKH') {
+        drillContext.value.customerType = customerCandidate
+        drillContext.value.customerName = undefined
+      } else {
+        drillContext.value.customerName = customerCandidate
+      }
+      return
+    }
+    if (activeDimension.value === 'DiaDiem') {
+      const locationCandidate = candidates.find(c => !looksLikePureTimeToken(c))
+      if (!locationCandidate) return
+      if (currentLevel.value === 'Bang') {
+        drillContext.value.state = locationCandidate
+        drillContext.value.city = undefined
+      } else {
+        drillContext.value.city = locationCandidate
+      }
+      return
+    }
+    const firstCandidate = candidates.find(Boolean)
+    if (!firstCandidate) return
     if (colAxis.value === 'Ma MH') {
-      drillContext.value.productKey = extractMemberCode(normalized)
+      drillContext.value.productKey = extractMemberCode(firstCandidate)
     } else if (colAxis.value === 'Ma KH') {
-      drillContext.value.customerKey = extractMemberCode(normalized)
+      drillContext.value.customerKey = extractMemberCode(firstCandidate)
     } else if (colAxis.value === 'Ma CH') {
-      drillContext.value.storeKey = extractMemberCode(normalized)
+      drillContext.value.storeKey = extractMemberCode(firstCandidate)
     }
   }
 
-  async function drillByMember(memberLabel: string) {
+  async function drillByMember(memberLabel: string, rowHints: Array<string | number> = []) {
     if (!canDrillDown.value) return
-    setContextByMember(memberLabel)
+    setContextByMember(memberLabel, rowHints)
     await doDrillDown()
   }
 
   async function doDrillDown() {
-    if (!canUseTimeOperations.value || !canDrillDown.value) return
+    if (!requestOperation('DrillDown')) return
+    if (activeDimension.value === 'ThoiGian' && currentLevel.value === 'Nam' && !drillContext.value.year) {
+      errorMessage.value = 'Hãy chọn một Năm trước khi drill down.'
+      return
+    }
+    if (activeDimension.value === 'ThoiGian' && currentLevel.value === 'Quy' && !drillContext.value.quarter) {
+      errorMessage.value = 'Hãy chọn một Quý trước khi drill down.'
+      return
+    }
+    if (activeDimension.value === 'KhachHang' && currentLevel.value === 'LoaiKH' && !drillContext.value.customerType) {
+      errorMessage.value = 'Hãy chọn một Loại KH trước khi drill down.'
+      return
+    }
+    if (activeDimension.value === 'DiaDiem' && currentLevel.value === 'Bang' && !drillContext.value.state) {
+      errorMessage.value = 'Hãy chọn một Bang trước khi drill down.'
+      return
+    }
     await executeOperation(
       () => olapApi.drill(buildRequest()),
       'DrillDown',
       (res) => {
-        currentLevel.value = res.CurrentLevel as OlapLevel
+        levelByDimension.value[activeDimension.value] = res.CurrentLevel as never
       },
     )
   }
 
   async function doRollUp() {
-    if (!canUseTimeOperations.value || !canRollUp.value) return
+    if (!requestOperation('RollUp')) return
     await executeOperation(
       () => olapApi.rollup(buildRequest()),
       'RollUp',
       (res) => {
-        currentLevel.value = res.CurrentLevel as OlapLevel
-        if (res.CurrentLevel === 'Quy') {
+        const previousLevel = currentLevel.value
+        levelByDimension.value[activeDimension.value] = res.CurrentLevel as never
+        if (activeDimension.value === 'ThoiGian' && previousLevel === 'Thang') {
+          drillContext.value.month = undefined
+        } else if (activeDimension.value === 'ThoiGian' && previousLevel === 'Quy') {
           drillContext.value.quarter = undefined
-        } else if (res.CurrentLevel === 'Nam') {
-          drillContext.value.quarter = undefined
+          drillContext.value.month = undefined
+        } else if (activeDimension.value === 'KhachHang' && previousLevel === 'TenKH') {
+          drillContext.value.customerName = undefined
+        } else if (activeDimension.value === 'DiaDiem' && previousLevel === 'ThanhPho') {
+          drillContext.value.city = undefined
         }
       },
     )
-  }
-
-  async function doSlice() {
-    if (!canUseTimeOperations.value) return
-    await executeOperation(() => olapApi.sliceDice({ ...buildRequest(), IsDice: false }), 'Slice')
-  }
-
-  async function doDice() {
-    if (!canUseTimeOperations.value) return
-    await executeOperation(() => olapApi.sliceDice({ ...buildRequest(), IsDice: true }), 'Dice')
-  }
-
-  async function doPivot() {
-    if (!canUseTimeOperations.value) return
-    const axisOptions = availablePivotAxes.value
-    if (axisOptions.length > 0) {
-      colAxis.value = colAxis.value === 'Thang' ? axisOptions[0] : 'Thang'
-    } else {
-      colAxis.value = 'Thang'
-    }
-    await executeOperation(() => olapApi.pivot({ ...buildRequest(), ColLevel: colAxis.value }), 'Pivot')
   }
 
   async function loadDefaultQuery() {
@@ -344,27 +594,149 @@ export const useOlapStore = defineStore('olap', () => {
       () => olapApi.getDefaultQuery(selectedCube.value),
       'DefaultQuery',
       () => {
-        currentLevel.value = 'Nam'
+        levelByDimension.value = { ThoiGian: 'Nam', KhachHang: 'LoaiKH', DiaDiem: 'Bang' }
         drillContext.value = {}
         selectedMemberLabel.value = ''
       },
     )
   }
 
-  async function runOperation(op: SafeOperationType) {
-    if (!requestOperation(op)) return
-    if (op === 'DrillDown') await doDrillDown()
-    if (op === 'RollUp') await doRollUp()
-    if (op === 'Slice') await doSlice()
-    if (op === 'Dice') await doDice()
-    if (op === 'Pivot') await doPivot()
+  async function loadOverviewForActiveDimension() {
+    if (activeDimension.value === 'KhachHang') {
+      if (!cubeHasCustomer.value) return
+      levelByDimension.value.KhachHang = 'LoaiKH'
+      drillContext.value.customerType = undefined
+      drillContext.value.customerName = undefined
+      await executeOperation(
+        () => olapApi.query({
+          ...buildRequest(),
+          ActiveDimension: 'KhachHang',
+          RowLevel: 'LoaiKH',
+          CustomerName: undefined,
+          CustomerType: undefined,
+        }),
+        'Query',
+        () => {
+          selectedMemberLabel.value = ''
+        },
+      )
+      return
+    }
+
+    if (activeDimension.value === 'DiaDiem') {
+      if (!cubeHasStore.value) return
+      levelByDimension.value.DiaDiem = 'Bang'
+      drillContext.value.state = undefined
+      drillContext.value.city = undefined
+      await executeOperation(
+        () => olapApi.query({
+          ...buildRequest(),
+          ActiveDimension: 'DiaDiem',
+          RowLevel: 'Bang',
+          City: undefined,
+          State: undefined,
+        }),
+        'Query',
+        () => {
+          selectedMemberLabel.value = ''
+        },
+      )
+    }
   }
 
-  async function confirmPendingOperation() {
-    const op = pendingOperation.value
-    if (!op) return
-    clearPendingOperation()
-    await runOperation(op)
+  function setSelectedMeasure(measure: string) {
+    const normalized = String(measure ?? '').trim()
+    if (!normalized) return
+    selectedMeasure.value = normalized
+  }
+
+  function setSelectedCube(cube: string) {
+    const normalized = String(cube ?? '').trim()
+    if (!normalized) return
+    selectedCube.value = normalized
+  }
+
+  function selectFact(fact: FactType) {
+    const defaults = FACT_DEFAULTS[fact]
+    activeDimensions.value = [...FACT_DIMENSION_DEFAULTS[fact]]
+    activeDimension.value = (activeDimensions.value.find(d => d !== 'MatHang') ?? 'ThoiGian') as DrillDimension
+    drillContext.value = {}
+    selectedMemberLabel.value = ''
+    errorMessage.value = ''
+    selectedMeasure.value = defaults.measure
+    includeSoLuong.value = defaults.includeSoLuong
+    const resolved = resolveCubeByDimensions(activeDimensions.value, fact)
+    cubeSwitchMode.value = 'default'
+    selectedCube.value = resolved ?? defaults.cube
+  }
+
+  async function addDimension(dimension: AnalyticalDimension) {
+    if (!factDimensionScope.value.includes(dimension)) return
+    if (activeDimensions.value.includes(dimension)) return
+    const next = [...activeDimensions.value, dimension]
+    if (!canResolveCube(next, currentFact.value)) {
+      errorMessage.value = 'Không tìm thấy cube phù hợp cho tập chiều mới.'
+      return
+    }
+    activeDimensions.value = next
+    if (dimension !== 'MatHang') {
+      levelByDimension.value[dimension] = (dimension === 'ThoiGian' ? 'Nam' : (dimension === 'KhachHang' ? 'LoaiKH' : 'Bang')) as never
+      activeDimension.value = dimension
+    }
+    await syncCubeByDimensions(next)
+  }
+
+  async function removeDimension(dimension: AnalyticalDimension) {
+    if (!activeDimensions.value.includes(dimension)) return
+    if (activeDimensions.value.length <= 1) {
+      errorMessage.value = 'Không thể bỏ chiều khi chỉ còn 1 chiều.'
+      return
+    }
+    const next = activeDimensions.value.filter(d => d !== dimension)
+    if (!canResolveCube(next, currentFact.value)) {
+      errorMessage.value = 'Không tìm thấy cube phù hợp sau khi bỏ chiều.'
+      return
+    }
+    if (dimension === 'ThoiGian') {
+      drillContext.value.year = undefined
+      drillContext.value.quarter = undefined
+      drillContext.value.month = undefined
+    } else if (dimension === 'KhachHang') {
+      drillContext.value.customerType = undefined
+      drillContext.value.customerName = undefined
+      drillContext.value.customerKey = undefined
+    } else if (dimension === 'DiaDiem') {
+      drillContext.value.state = undefined
+      drillContext.value.city = undefined
+      drillContext.value.storeKey = undefined
+    }
+    if (dimension === 'MatHang') {
+      drillContext.value.productKey = undefined
+    }
+    activeDimensions.value = next
+    if (!next.includes(activeDimension.value)) {
+      activeDimension.value = (next.find(d => d !== 'MatHang') ?? 'ThoiGian') as DrillDimension
+    }
+    await syncCubeByDimensions(next)
+  }
+
+  async function runOperation(op: 'DrillDown' | 'RollUp') {
+    if (op === 'DrillDown') await doDrillDown()
+    if (op === 'RollUp') await doRollUp()
+  }
+
+  async function goHomeDashboard() {
+    activeDimension.value = 'ThoiGian'
+    levelByDimension.value = { ThoiGian: 'Nam', KhachHang: 'LoaiKH', DiaDiem: 'Bang' }
+    drillContext.value = {}
+    selectedMemberLabel.value = ''
+    errorMessage.value = ''
+    selectFact('BanHang')
+
+    if (selectedCube.value !== HOME_CUBE) return
+
+    await loadMetadata()
+    await loadDefaultQuery()
   }
 
   watch(selectedMeasure, (measure) => {
@@ -375,7 +747,33 @@ export const useOlapStore = defineStore('olap', () => {
 
   watch(selectedCube, async () => {
     await loadMetadata()
+    if (cubeSwitchMode.value === 'preserve') {
+      cubeSwitchMode.value = 'default'
+      await queryCurrentView()
+      return
+    }
     await loadDefaultQuery()
+  })
+
+  watch(activeDimension, async (next, prev) => {
+    if (next === prev) return
+    if (isLoading.value) {
+      pendingOverviewDimension.value = next
+      return
+    }
+    await loadOverviewForActiveDimension()
+  })
+
+  watch(isLoading, async (loading) => {
+    if (loading) return
+    const pending = pendingOverviewDimension.value
+    if (!pending) return
+    if (pending !== activeDimension.value) {
+      pendingOverviewDimension.value = null
+      return
+    }
+    pendingOverviewDimension.value = null
+    await loadOverviewForActiveDimension()
   })
 
   return {
@@ -384,14 +782,18 @@ export const useOlapStore = defineStore('olap', () => {
     includeSoLuong,
     selectedMemberLabel, drillContext,
     resultData, metadata, isLoading, lastOperation, errorMessage,
-    pendingOperation, pendingWarning, pendingRisk,
+    activeDimension, levelByDimension,
     lastQueryMs, lastResultAt, metadataLoadedAt, tableDensity,
     canDrillDown, canRollUp,
     selectedCubeInfo,
-    cubeHasTime, cubeHasProduct, cubeHasCustomer, cubeHasStore,
-    canUseTimeOperations, availablePivotAxes, hasDimensionFilter, operationGuards,
-    loadMetadata, doDrillDown, doRollUp, doSlice, doDice, doPivot,
-    loadDefaultQuery, runOperation, requestOperation, clearPendingOperation, confirmPendingOperation,
-    drillByMember, setContextByMember,
+    cubeHasTime, cubeHasProduct, cubeHasCustomer, cubeHasStore, currentFact,
+    availablePivotAxes, operationGuards,
+    activeDimensions, availableAddDimensions, removableDimensions,
+    loadMetadata, doDrillDown, doRollUp,
+    loadOverviewForActiveDimension,
+    loadCubeMappings, addDimension, removeDimension,
+    queryCurrentView,
+    loadDefaultQuery, runOperation, requestOperation, goHomeDashboard,
+    drillByMember, setContextByMember, setSelectedMeasure, setSelectedCube, selectFact,
   }
 })

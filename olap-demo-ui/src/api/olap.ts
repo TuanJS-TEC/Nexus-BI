@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { OlapRequest, SliceDiceRequest, OlapResult, MetadataResult } from '@/types/olap'
+import type { OlapRequest, SliceDiceRequest, OlapResult, MetadataResult, CubeMappingItem } from '@/types/olap'
 
 const api = axios.create({ baseURL: '/api/olap' })
 
@@ -9,6 +9,12 @@ export const olapApi = {
 
   getDefaultQuery: (cube?: string): Promise<OlapResult> =>
     api.get('/default-query', { params: { cube } }).then(r => r.data),
+
+  getCubeMappings: (): Promise<CubeMappingItem[]> =>
+    api.get('/cube-mappings').then(r => r.data),
+
+  query: (req: OlapRequest): Promise<OlapResult> =>
+    api.post('/query', req).then(r => r.data),
 
   drill: (req: OlapRequest): Promise<OlapResult> =>
     api.post('/drill', req).then(r => r.data),

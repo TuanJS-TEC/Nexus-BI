@@ -87,13 +87,30 @@ public class OlapController : ControllerBase
         }
     }
 
+    [HttpPost("query")]
+    public async Task<IActionResult> Query([FromBody] OlapRequest req)
+    {
+        try
+        {
+            string cube = string.IsNullOrWhiteSpace(req.Cube) ? DefaultCube : req.Cube;
+            string mdx = MdxBuilder.QueryCurrent(req, cube);
+            string level = string.IsNullOrWhiteSpace(req.RowLevel) ? "Nam" : req.RowLevel;
+            return Ok(await _olap.ExecuteAsync(mdx, level, "Query"));
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new OlapResult { Success = false, Error = ex.Message });
+        }
+    }
+
     [HttpGet("default-query")]
     public async Task<IActionResult> DefaultQuery([FromQuery] string? cube)
     {
         try
         {
             string effectiveCube = string.IsNullOrWhiteSpace(cube) ? DefaultCube : cube;
-            string mdx = $@"SELECT {{ [Measures].[Tong Tien], [Measures].[So Luong Dat] }} ON COLUMNS,
+            string measureSet = BuildDefaultMeasureSet(effectiveCube);
+            string mdx = $@"SELECT {measureSet} ON COLUMNS,
   NON EMPTY [Dim_Thoi_Gian].[Hierarchy].[Nam].Members ON ROWS
 FROM [{effectiveCube}]";
 
@@ -103,6 +120,49 @@ FROM [{effectiveCube}]";
         {
             return BadRequest(new OlapResult { Success = false, Error = ex.Message });
         }
+    }
+
+    [HttpGet("cube-mappings")]
+    public async Task<IActionResult> GetCubeMappings()
+    {
+        try
+        {
+            var meta = await _olap.GetMetadataAsync(DefaultCube);
+            var mappings = meta.CubeInfos
+                .Select(info =>
+                {
+                    var tokens = new List<string>();
+                    if (info.Capabilities.HasProduct) tokens.Add("MH");
+                    if (info.Capabilities.HasTime) tokens.Add("TG");
+                    if (info.Capabilities.HasCustomer) tokens.Add("KH");
+                    if (info.Capabilities.HasStore) tokens.Add("CH");
+                    return new
+                    {
+                        cube = info.Name,
+                        fact = info.Fact.Contains("TonKho", StringComparison.OrdinalIgnoreCase) ? "TonKho" : "BanHang",
+                        dimensions = tokens 
+                    };
+                })
+                .OrderBy(x => x.fact)
+                .ThenBy(x => x.cube)
+                .ToList();
+
+            return Ok(mappings);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new OlapResult { Success = false, Error = ex.Message });
+        }
+    }
+
+    private static string BuildDefaultMeasureSet(string cube)
+    {
+        if (cube.Contains("TonKho", StringComparison.OrdinalIgnoreCase))
+        {
+            return "{ [Measures].[So Luong Trong Kho] }";
+        }
+
+        return "{ [Measures].[Tong Tien], [Measures].[So Luong Dat] }";
     }
 }
 

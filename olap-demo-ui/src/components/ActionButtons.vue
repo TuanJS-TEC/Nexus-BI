@@ -1,11 +1,59 @@
 <template>
   <div class="action-panel glass-card" :class="{ compact: compactMode }">
-    <h3 v-if="!compactMode" class="panel-title">Thao Tác OLAP</h3>
-    <p v-if="!compactMode" class="panel-desc">Chế độ an toàn: chỉ cho phép chạy truy vấn hợp lệ với ngữ cảnh lọc hiện tại.</p>
+    <h3 v-if="!compactMode" class="panel-title">Drill / Roll</h3>
+    <p v-if="!compactMode" class="panel-desc">Tính năng 1: chọn chiều cần điều hướng rồi click member trên bảng/biểu đồ để drill down.</p>
 
-    <div v-if="!compactMode" class="safety-list">
-      <span class="safety-chip ok">An toàn: tự khóa thao tác dễ lỗi</span>
-      <span class="safety-chip warn">Cảnh báo trước khi chạy tác vụ nặng</span>
+    <div class="dimension-picker">
+      <button class="dim-btn" :class="{ active: store.activeDimension === 'ThoiGian' }" @click="setActiveDimension('ThoiGian')">Thời Gian</button>
+      <button class="dim-btn" :class="{ active: store.activeDimension === 'KhachHang' }" @click="setActiveDimension('KhachHang')">Khách Hàng</button>
+      <button
+        class="dim-btn"
+        :class="{ active: store.activeDimension === 'DiaDiem' }"
+        :disabled="!store.cubeHasStore"
+        @click="setActiveDimension('DiaDiem')"
+      >
+        Địa Điểm
+      </button>
+    </div>
+
+    <div class="member-picker" v-if="customerTypeCandidates.length && store.activeDimension === 'KhachHang' && store.currentLevel === 'LoaiKH'">
+      <span class="axis-tag">Chọn loại KH:</span>
+      <button
+        v-for="member in customerTypeCandidates"
+        :key="`kh-${member}`"
+        class="dim-chip dim-chip-add"
+        @click="pickCustomerType(member)"
+      >
+        {{ member }}
+      </button>
+    </div>
+
+    <div v-if="!compactMode" class="dimension-manager">
+      <div class="dim-list">
+        <span class="axis-tag">Chiều active:</span>
+        <button
+          v-for="dim in store.activeDimensions"
+          :key="`active-${dim}`"
+          class="dim-chip"
+          @click="store.removeDimension(dim)"
+          :disabled="store.activeDimensions.length <= 1"
+          title="Bỏ chiều khỏi biểu đồ"
+        >
+          {{ levelMap[dim] ?? dim }} ×
+        </button>
+      </div>
+      <div class="dim-list" v-if="store.availableAddDimensions.length">
+        <span class="axis-tag">Thêm chiều:</span>
+        <button
+          v-for="dim in store.availableAddDimensions"
+          :key="`add-${dim}`"
+          class="dim-chip dim-chip-add"
+          @click="store.addDimension(dim)"
+          title="Thêm chiều vào biểu đồ"
+        >
+          + {{ levelMap[dim] ?? dim }}
+        </button>
+      </div>
     </div>
 
     <div class="btn-grid">
@@ -35,59 +83,6 @@
         <span v-if="!compactMode && guards.RollUp.reason" class="btn-reason">{{ guards.RollUp.reason }}</span>
       </button>
 
-      <!-- Slice -->
-      <button
-        class="olap-btn btn-slice"
-        :disabled="!guards.Slice.enabled || store.isLoading"
-        :class="{ active: store.lastOperation === 'Slice' }"
-        @click="store.runOperation('Slice')"
-        title="Slice: lọc 1 chiều duy nhất (cần chọn Năm)"
-      >
-        <span class="btn-label">Slice</span>
-        <span v-if="!compactMode" class="btn-sub">1 chiều</span>
-        <span v-if="!compactMode && guards.Slice.reason" class="btn-reason">{{ guards.Slice.reason }}</span>
-      </button>
-
-      <!-- Dice -->
-      <button
-        class="olap-btn btn-dice"
-        :disabled="!guards.Dice.enabled || store.isLoading"
-        :class="{ active: store.lastOperation === 'Dice' }"
-        @click="store.runOperation('Dice')"
-        title="Dice: lọc nhiều chiều cùng lúc"
-      >
-        <span class="btn-label">Dice</span>
-        <span v-if="!compactMode" class="btn-sub">Nhiều chiều</span>
-        <span v-if="!compactMode && guards.Dice.reason" class="btn-reason">{{ guards.Dice.reason }}</span>
-      </button>
-
-      <!-- Pivot -->
-      <button
-        class="olap-btn btn-pivot"
-        :disabled="!guards.Pivot.enabled || store.isLoading"
-        :class="{ active: store.lastOperation === 'Pivot' }"
-        @click="store.runOperation('Pivot')"
-        title="Pivot: hoán đổi trục hàng / cột"
-      >
-        <span class="btn-label">Pivot</span>
-        <span v-if="!compactMode" class="btn-sub">Đổi trục</span>
-        <span v-if="!compactMode && guards.Pivot.reason" class="btn-reason">{{ guards.Pivot.reason }}</span>
-      </button>
-    </div>
-
-    <div v-if="store.pendingOperation" class="confirm-box" :class="[`risk-${store.pendingRisk}`, { compact: compactMode }]">
-      <div class="confirm-title">
-        Cảnh báo trước khi chạy <strong>{{ store.pendingOperation }}</strong>
-      </div>
-      <p class="confirm-text">{{ store.pendingWarning || 'Truy vấn có thể ảnh hưởng hiệu năng hệ thống.' }}</p>
-      <div class="confirm-actions">
-        <button class="confirm-btn confirm-run" @click="store.confirmPendingOperation()" :disabled="store.isLoading">
-          Tôi đã hiểu, tiếp tục
-        </button>
-        <button class="confirm-btn confirm-cancel" @click="store.clearPendingOperation()" :disabled="store.isLoading">
-          Hủy
-        </button>
-      </div>
     </div>
 
     <!-- Loading indicator -->
@@ -97,8 +92,8 @@
 
     <!-- Axis info -->
     <div class="axis-info" v-if="!compactMode && store.colAxis">
-      <span class="axis-tag">Cột: <strong>{{ axisColLabel }}</strong></span>
-      <span class="axis-tag">Hàng: <strong>{{ axisRowLabel }}</strong></span>
+      <span class="axis-tag">Chiều drill: <strong>{{ activeDimensionLabel }}</strong></span>
+      <span class="axis-tag">Level hiện tại: <strong>{{ currentLevelLabel }}</strong></span>
     </div>
 
     <!-- Operation badge -->
@@ -111,43 +106,75 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useOlapStore } from '@/stores/olapStore'
+import type { DrillDimension } from '@/stores/olapStore'
 
 const store = useOlapStore()
 const guards = computed(() => store.operationGuards)
 const props = withDefaults(defineProps<{ compact?: boolean }>(), { compact: false })
 const compactMode = computed(() => props.compact)
 
-const levelMap: Record<string, string> = { Nam: 'Năm', Quy: 'Quý', Thang: 'Tháng' }
+const levelMap: Record<string, string> = {
+  Nam: 'Năm', Quy: 'Quý', Thang: 'Tháng',
+  LoaiKH: 'Loại KH', TenKH: 'Tên KH',
+  Bang: 'Bang', ThanhPho: 'Thành phố',
+  ThoiGian: 'Thời Gian', KhachHang: 'Khách Hàng', DiaDiem: 'Địa Điểm', MatHang: 'Mặt Hàng',
+}
 
 const drillLabel = computed(() => {
-  const next = { Nam: 'Quý', Quy: 'Tháng', Thang: '—' }[store.currentLevel]
+  if (store.activeDimension === 'KhachHang') {
+    const next = { LoaiKH: 'TenKH', TenKH: '—' }[store.currentLevel as 'LoaiKH' | 'TenKH']
+    return `${levelMap[store.currentLevel]} → ${levelMap[next ?? 'LoaiKH'] ?? '—'}`
+  }
+  if (store.activeDimension === 'DiaDiem') {
+    const next = { Bang: 'ThanhPho', ThanhPho: '—' }[store.currentLevel as 'Bang' | 'ThanhPho']
+    return `${levelMap[store.currentLevel]} → ${levelMap[next ?? 'Bang'] ?? '—'}`
+  }
+  const next = { Nam: 'Quy', Quy: 'Thang', Thang: '—' }[store.currentLevel as 'Nam' | 'Quy' | 'Thang']
   return `${levelMap[store.currentLevel]} → ${levelMap[next ?? 'Nam'] ?? '—'}`
 })
 
 const rollupLabel = computed(() => {
-  const prev = { Nam: '—', Quy: 'Năm', Thang: 'Quý' }[store.currentLevel]
+  if (store.activeDimension === 'KhachHang') {
+    const prev = { LoaiKH: '—', TenKH: 'LoaiKH' }[store.currentLevel as 'LoaiKH' | 'TenKH']
+    return `${levelMap[store.currentLevel]} → ${levelMap[prev ?? 'LoaiKH'] ?? '—'}`
+  }
+  if (store.activeDimension === 'DiaDiem') {
+    const prev = { Bang: '—', ThanhPho: 'Bang' }[store.currentLevel as 'Bang' | 'ThanhPho']
+    return `${levelMap[store.currentLevel]} → ${levelMap[prev ?? 'Bang'] ?? '—'}`
+  }
+  const prev = { Nam: '—', Quy: 'Nam', Thang: 'Quy' }[store.currentLevel as 'Nam' | 'Quy' | 'Thang']
   return `${levelMap[store.currentLevel]} → ${levelMap[prev ?? 'Nam'] ?? '—'}`
 })
 
-const axisColLabel = computed(() =>
-  store.colAxis === 'Ma MH'
-    ? 'Mặt Hàng'
-    : store.colAxis === 'Ma KH'
-      ? 'Khách Hàng'
-      : store.colAxis === 'Ma CH'
-        ? 'Cửa Hàng'
-        : 'Thời Gian'
+const activeDimensionLabel = computed(() =>
+  store.activeDimension === 'ThoiGian' ? 'Thời Gian' : (store.activeDimension === 'KhachHang' ? 'Khách Hàng' : 'Địa Điểm')
 )
-const axisRowLabel = computed(() =>
-  store.colAxis === 'Thang' ? pivotAxisLabel.value : 'Thời Gian'
-)
+const currentLevelLabel = computed(() => levelMap[store.currentLevel] ?? store.currentLevel)
 
-const pivotAxisLabel = computed(() => {
-  if (store.availablePivotAxes.includes('Ma MH')) return 'Mặt Hàng'
-  if (store.availablePivotAxes.includes('Ma KH')) return 'Khách Hàng'
-  if (store.availablePivotAxes.includes('Ma CH')) return 'Cửa Hàng'
-  return 'Chiều phụ'
+const customerTypeCandidates = computed(() => {
+  const rows = store.resultData?.Rows ?? []
+  const cols = store.resultData?.Columns ?? []
+  if (!rows.length || !cols.length) return []
+  const typeCol = cols.find(c => /\[loai\s*kh\]|loaikh|customer\s*type/i.test(c)) ?? cols[0]
+  const values = rows
+    .map(r => String(r[typeCol] ?? '').trim())
+    .filter(Boolean)
+    .filter(v => !/^\d{4}$/.test(v))
+  return [...new Set(values)].slice(0, 12)
 })
+
+function pickCustomerType(member: string) {
+  if (!member) return
+  store.setContextByMember(member, [member])
+}
+
+function setActiveDimension(dimension: DrillDimension) {
+  if (dimension === 'DiaDiem' && !store.cubeHasStore) {
+    store.errorMessage = 'Cube hiện tại không hỗ trợ chiều Địa Điểm.'
+    return
+  }
+  store.activeDimension = dimension
+}
 </script>
 
 <style scoped>
@@ -183,29 +210,29 @@ const pivotAxisLabel = computed(() => {
   line-height: 1.4;
 }
 
-.safety-list {
+.dimension-picker {
   display: flex;
-  flex-wrap: wrap;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
-.safety-chip {
-  border-radius: 999px;
-  padding: 0.2rem 0.6rem;
-  font-size: 0.7rem;
-  border: 1px solid transparent;
+.dim-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
 }
-
-.safety-chip.ok {
-  color: #2f5f1d;
-  background: var(--color-state-success-bg);
-  border-color: var(--color-state-success-border);
+.dim-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
-
-.safety-chip.warn {
-  color: var(--color-state-warning-text);
-  background: var(--color-state-warning-bg);
-  border-color: var(--color-state-warning-border);
+.dim-btn.active {
+  background: var(--color-brand-primary);
+  color: #fff;
+  border-color: var(--color-brand-primary);
 }
 
 .btn-grid {
@@ -271,10 +298,6 @@ const pivotAxisLabel = computed(() => {
 /* Colors per operation */
 .btn-drill  { background: linear-gradient(135deg, var(--color-brand-primary), #5a9a41); color: #fff; border-color: var(--color-brand-primary); }
 .btn-rollup { background: linear-gradient(135deg, #5a9a41, var(--palette-positive-400)); color: #fff; border-color: #5a9a41; }
-.btn-slice  { background: linear-gradient(135deg, var(--color-brand-primary), #7fb85d); color: #fff; border-color: var(--color-brand-primary); }
-.btn-dice   { background: linear-gradient(135deg, #7fb85d, var(--palette-positive-500)); color: #fff; border-color: #7fb85d; }
-.btn-pivot  { background: linear-gradient(135deg, var(--color-state-warning-text), var(--color-kpi-critical)); color: #fff; border-color: var(--color-kpi-critical); grid-column: 1 / -1; }
-.action-panel.compact .btn-pivot { grid-column: auto; }
 
 .olap-btn.active { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(255,255,255,0.4); }
 
@@ -323,74 +346,43 @@ const pivotAxisLabel = computed(() => {
   border-radius: 6px;
 }
 
-.confirm-box {
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  padding: 0.75rem;
-  background: rgba(15, 23, 42, 0.55);
-}
-
-.confirm-box.compact {
-  margin-top: 0.2rem;
-  padding: 0.55rem;
-}
-
-.confirm-box.risk-medium {
-  border-color: var(--color-state-warning-border);
-  background: var(--color-state-warning-bg);
-}
-
-.confirm-box.risk-high {
-  border-color: var(--color-state-critical-border);
-  background: var(--color-state-critical-bg);
-}
-
-.confirm-title {
-  font-size: 0.8rem;
-  color: var(--text-primary);
-  margin-bottom: 0.35rem;
-}
-
-.confirm-text {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.76rem;
-}
-
-.confirm-actions {
-  margin-top: 0.65rem;
+.dimension-manager {
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.45rem;
 }
 
-.confirm-box.compact .confirm-actions {
-  margin-top: 0.45rem;
+.member-picker {
+  display: flex;
+  align-items: center;
   gap: 0.35rem;
+  flex-wrap: wrap;
 }
 
-.confirm-btn {
-  border-radius: 8px;
+.dim-list {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.dim-chip {
   border: 1px solid var(--border);
-  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
   font-size: 0.72rem;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.confirm-run {
-  background: var(--color-brand-primary);
-  color: #fff;
-  border-color: var(--color-brand-primary);
-}
-
-.confirm-cancel {
-  background: transparent;
+  background: #fff;
   color: var(--text-muted);
+  cursor: pointer;
+}
+
+.dim-chip-add {
+  border-color: color-mix(in srgb, var(--color-brand-primary) 45%, var(--border));
+  color: var(--color-brand-primary);
 }
 
 @media (max-width: 768px) {
   .action-panel { padding: 1rem; }
   .btn-grid { grid-template-columns: 1fr; }
-  .btn-pivot { grid-column: auto; }
 }
 </style>
