@@ -1,0 +1,516 @@
+<template>
+  <div class="admin-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo-icon">DWH</div>
+        <div>
+          <h1 class="brand-name">OLAP Studio</h1>
+          <span class="version">v2.4.0</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3 class="section-title">Điều hướng trực tiếp</h3>
+        <p class="nav-guide">Click vào một member trên biểu đồ hoặc bảng để drill xuống cấp chi tiết tiếp theo.</p>
+        <p class="nav-guide">Ví dụ: chọn năm 2024 để xuống Quý, chọn Quý để xuống Tháng. Nút Roll Up đưa dữ liệu về cấp cha.</p>
+      </div>
+
+      <div class="sidebar-section metadata">
+        <h3 class="section-title">Metadata</h3>
+        <details open>
+          <summary>Cubes</summary>
+          <ul>
+            <li v-for="cube in store.metadata?.Cubes ?? []" :key="cube">{{ cube }}</li>
+          </ul>
+        </details>
+        <details open>
+          <summary>Measures</summary>
+          <ul>
+            <li v-for="measure in store.metadata?.Measures ?? []" :key="measure">{{ measure }}</li>
+          </ul>
+        </details>
+      </div>
+
+      <div class="connection-status">
+        <div class="status-indicator" :class="{ active: isConnected }"></div>
+        <span>{{ isConnected ? 'SSAS Connected' : 'Disconnected' }}</span>
+      </div>
+    </aside>
+
+    <main class="content-area">
+      <header class="top-bar">
+        <div class="breadcrumb">Workspace / Sales Analysis / {{ store.selectedCube }}</div>
+        <div class="top-actions">
+          <ActionButtons compact />
+          <div class="utility-bar">
+            <div class="density-toggle">
+              <button :class="{ active: store.tableDensity === 'compact' }" @click="store.tableDensity = 'compact'">Compact</button>
+              <button :class="{ active: store.tableDensity === 'comfortable' }" @click="store.tableDensity = 'comfortable'">Comfortable</button>
+            </div>
+            <button class="util-btn" @click="exportCsv">CSV</button>
+            <button class="util-btn util-btn-primary" @click="exportExcel">Export Excel</button>
+            <button class="util-btn" @click="exportPdf">PDF</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="error-banner" v-if="store.errorMessage">
+        <span>{{ store.errorMessage }}</span>
+        <button @click="store.errorMessage = ''" aria-label="Đóng thông báo">Đóng</button>
+      </div>
+      <div class="success-banner" v-else-if="successMessage">
+        <span>{{ successMessage }}</span>
+      </div>
+
+      <div class="scroll-container">
+        <section class="stats-grid">
+          <div v-for="stat in stats" :key="stat.label" class="stat-tile">
+            <span class="stat-label">{{ stat.label }}</span>
+            <div class="stat-value">{{ stat.value }}</div>
+          </div>
+        </section>
+
+        <details class="mdx-preview" v-if="store.resultData?.Mdx">
+          <summary>MDX Preview</summary>
+          <pre>{{ store.resultData.Mdx }}</pre>
+        </details>
+
+        <div class="data-grid">
+          <div class="shadow-card">
+            <OlapChart />
+          </div>
+          <div class="shadow-card">
+            <OlapTable />
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import ActionButtons from '@/components/ActionButtons.vue'
+import OlapTable from '@/components/OlapTable.vue'
+import OlapChart from '@/components/OlapChart.vue'
+import { useOlapStore } from '@/stores/olapStore'
+
+const store = useOlapStore()
+const isConnected = ref(false)
+
+onMounted(async () => {
+  await store.loadMetadata()
+  isConnected.value = !!store.metadata
+  if (!store.resultData) {
+    await store.loadDefaultQuery()
+  }
+})
+
+const stats = computed(() => {
+  const r = store.resultData
+  const rows = r?.Rows.length ?? 0
+  const totalRows = rows
+  const freshness = store.lastResultAt ?? store.metadataLoadedAt
+  const freshnessText = freshness ? freshness.toLocaleString('vi-VN') : '--'
+
+  return [
+    { label: 'Data Freshness', value: freshnessText },
+    { label: 'Query Performance', value: store.lastQueryMs ? `${store.lastQueryMs} ms` : '--' },
+    { label: 'Rows Processed', value: `${rows} / ${totalRows}` },
+    { label: 'Operation', value: store.lastOperation || '--' },
+  ]
+})
+
+const successMessage = computed(() => {
+  if (store.isLoading || store.errorMessage || !store.lastOperation || !store.resultData?.Success) return ''
+  return `Nạp dữ liệu thành công: ${store.lastOperation} (${store.resultData.Rows.length} dòng).`
+})
+
+function exportCsv() {
+  const result = store.resultData
+  if (!result?.Rows?.length) return
+  const headers = result.Columns
+  const lines = [
+    headers.join(','),
+    ...result.Rows.map(row => headers.map(h => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(',')),
+  ]
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'olap-export.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportExcel() {
+  exportCsv()
+}
+
+function exportPdf() {
+  window.print()
+}
+</script>
+
+<style scoped>
+.admin-layout {
+  min-height: 100vh;
+  display: flex;
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-family: Inter, Roboto, "Segoe UI", Arial, sans-serif;
+}
+
+.sidebar {
+  width: 340px;
+  background: var(--sidebar-bg);
+  color: var(--text-on-dark);
+  border-right: 1px solid rgba(154, 216, 114, 0.22);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logo-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--color-brand-primary) 35%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--color-interaction-active) 45%, #0f172a);
+  font-weight: 700;
+  color: var(--text-on-brand);
+}
+
+.brand-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.version {
+  font-size: 0.75rem;
+  color: color-mix(in srgb, var(--text-on-dark) 70%, #000000);
+}
+
+.sidebar-section {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(154, 216, 114, 0.25);
+  border-radius: 12px;
+  padding: 0.75rem;
+  transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.section-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--text-on-dark) 74%, #000000);
+}
+
+.nav-guide {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--text-on-dark) 76%, #000000);
+}
+
+.metadata details {
+  margin-bottom: 0.5rem;
+}
+
+.metadata summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-on-dark);
+}
+
+.metadata summary:hover {
+  color: var(--color-interaction-active);
+}
+
+.metadata ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 0.75rem;
+  color: color-mix(in srgb, var(--text-on-dark) 74%, #000000);
+}
+
+.metadata li:hover {
+  color: var(--color-interaction-active);
+}
+
+.connection-status {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-on-dark);
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-on-dark) 55%, #374151);
+}
+
+.status-indicator.active {
+  background: var(--color-status-connected);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-status-connected) 30%, transparent);
+}
+
+.content-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--color-brand-header-bg);
+  color: var(--text-on-brand);
+}
+
+.breadcrumb {
+  font-size: 0.78rem;
+  color: color-mix(in srgb, var(--text-on-brand) 82%, #000000);
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.utility-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.density-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.density-toggle button {
+  border: none;
+  background: #fff;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.density-toggle button.active {
+  background: var(--color-brand-primary);
+  color: var(--text-on-brand);
+}
+
+.util-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.util-btn-primary {
+  background: var(--color-brand-primary);
+  color: var(--text-on-brand);
+  border-color: var(--color-brand-primary);
+}
+
+.util-btn-primary:hover {
+  background: var(--color-brand-primary-hover);
+  border-color: var(--color-brand-primary-hover);
+}
+
+.scroll-container {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow: auto;
+}
+
+.error-banner {
+  margin: 0.75rem 1rem 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-state-critical-border);
+  background: var(--color-state-critical-bg);
+  color: var(--color-state-critical-text);
+  font-size: 0.8rem;
+}
+
+.error-banner button {
+  border: none;
+  background: transparent;
+  color: var(--color-state-critical-text);
+  cursor: pointer;
+}
+
+.success-banner {
+  margin: 0.75rem 1rem 0;
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-state-success-border);
+  background: var(--color-state-success-bg);
+  color: var(--color-state-success-text);
+  font-size: 0.8rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.stat-tile {
+  background: #fff;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.stat-value {
+  margin-top: 0.3rem;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.mdx-preview {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  padding: 0.6rem 0.7rem;
+  transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.mdx-preview summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.mdx-preview pre {
+  margin: 0.6rem 0 0;
+  background: #1f2937;
+  color: #f3f4f6;
+  border-radius: 8px;
+  padding: 0.7rem;
+  overflow: auto;
+  font-size: 0.73rem;
+}
+
+.data-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr);
+  gap: 1rem;
+}
+
+.shadow-card {
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.sidebar-section:hover,
+.stat-tile:hover,
+.mdx-preview:hover,
+.shadow-card:hover,
+.util-btn:hover,
+.density-toggle button:hover {
+  background: color-mix(in srgb, #ffffff 70%, transparent);
+  border-color: color-mix(in srgb, var(--color-interaction-active) 38%, var(--border));
+  backdrop-filter: blur(10px) saturate(125%);
+  -webkit-backdrop-filter: blur(10px) saturate(125%);
+  box-shadow: 0 10px 22px -14px rgb(15 23 42 / 35%);
+  transform: translateY(-1px);
+}
+
+.top-actions :deep(.action-panel) {
+  min-width: 560px;
+}
+
+@media (max-width: 1280px) {
+  .sidebar {
+    width: 300px;
+  }
+  .top-actions {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  .top-actions :deep(.action-panel) {
+    min-width: 100%;
+  }
+}
+
+@media (max-width: 1024px) {
+  .admin-layout {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid rgba(154, 216, 114, 0.3);
+  }
+  .top-actions :deep(.action-panel) {
+    min-width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .top-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .top-actions {
+    width: 100%;
+    align-items: stretch;
+  }
+  .utility-bar {
+    flex-wrap: wrap;
+  }
+}
+</style>

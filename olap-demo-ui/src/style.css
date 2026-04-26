@@ -1,0 +1,101 @@
+/* ─── Google Fonts ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+/* ─── CSS Variables ─────────────────────────────────────────────────────────── */
+:root {
+  /* Brand Palette */
+  --palette-trust-700: #468432;
+  --palette-positive-500: #9AD872;
+  --palette-emphasis-200: #FFEF91;
+  --palette-alert-500: #FFA02E;
+  --palette-trust-600: #5B7E3C;
+  --palette-positive-400: #A2CB8B;
+  --palette-emphasis-150: #E8F5BD;
+  --palette-critical-500: #C44545;
+
+  /* Semantic Colors */
+  --color-brand-header-bg: var(--palette-trust-700);
+  --color-brand-primary: var(--palette-trust-600);
+  --color-brand-primary-hover: #3b712a;
+  --color-interaction-active: var(--palette-positive-400);
+  --color-status-connected: var(--palette-positive-500);
+  --color-state-success-bg: color-mix(in srgb, var(--palette-positive-400) 24%, white);
+  --color-state-success-text: #2f5f1d;
+  --color-state-success-border: color-mix(in srgb, var(--palette-positive-400) 55%, #2f5f1d);
+  --color-state-warning-bg: color-mix(in srgb, var(--palette-alert-500) 22%, white);
+  --color-state-warning-text: #8a4d05;
+  --color-state-warning-border: color-mix(in srgb, var(--palette-alert-500) 55%, #8a4d05);
+  --color-state-critical-bg: color-mix(in srgb, var(--palette-critical-500) 18%, white);
+  --color-state-critical-text: #8d2f2f;
+  --color-state-critical-border: color-mix(in srgb, var(--palette-critical-500) 60%, #8d2f2f);
+  --color-kpi-critical: var(--palette-critical-500);
+  --color-table-hover: var(--palette-emphasis-150);
+  --color-highlight-search: var(--palette-emphasis-150);
+
+  /* Surfaces */
+  --bg-main: #f8fbf3;
+  --bg-card: #ffffff;
+  --bg-input: #f7faf5;
+  --sidebar-bg: #173026;
+
+  /* Text */
+  --text-primary: #1f2937;
+  --text-main: #1f2937;
+  --text-muted: #4b5563;
+  --text-on-dark: #e5efe1;
+  --text-on-brand: #ffffff;
+
+  /* Border */
+  --border: #d9e3d2;
+  --border-soft: #e6edde;
+
+  /* Effect */
+  --shadow-sm: 0 4px 14px rgba(32, 54, 21, 0.08);
+  --glow: 0 0 30px rgba(70, 132, 50, 0.15);
+
+  /* Backward-compatible aliases */
+  --accent: var(--color-brand-primary);
+  --accent-hover: var(--color-brand-primary-hover);
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
+  /* Animated gradient background */
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(70, 132, 50, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(154, 216, 114, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(255, 239, 145, 0.1) 0%, transparent 50%);
+  background-attachment: fixed;
+}
+
+/* ─── Glass card utility ─────────────────────────────────────────────────────── */
+.glass-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.05); }
+::-webkit-scrollbar-thumb { background: rgba(70, 132, 50, 0.35); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(70, 132, 50, 0.5); }
+
+/* ─── Transitions ────────────────────────────────────────────────────────────── */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
