@@ -49,7 +49,7 @@ npm run dev
 {
   "Ssas": {
     "ConnectionString": "Data Source=DESKTOP-22UAJFI;Catalog=Datawarehouse_01;",
-    "DefaultCube": "Cube4FactBanHang_3D_KH_MH_TG"
+    "DefaultCube": "Cube4BanHang_1D_TG_01"
   }
 }
 ```
@@ -57,17 +57,17 @@ npm run dev
 ## Danh Sách Cube
 | Cube | Dimensions |
 |------|-----------|
-| `Cube4FactBanHang_3D_KH_MH_TG` | KH × MH × TG (3D) |
-| `Cube4BanHang_2D_KH_TG` | KH × TG |
-| `Cube4BanHang_2D_MH_TG` | MH × TG |
-| `Cube4BanHang_2D_MH_KH` | MH × KH |
-| `Cube4BanHang_1D_MH` | MH only |
-| `Cube4BanHang_1D_KH` | KH only |
-| `Cube4BanHang_1D_TG` | TG only |
-| `Cube4TonKho_3D_MH_CH_TG` | MH × CH × TG |
-| `Cube4TonKho_2D_CH_TG` | CH × TG |
-| `Cube4TonKho_2D_MH_TG` | MH × TG |
-| `Cube4TonKho_1D_TG` | TG only |
+| `Cube4BanHang_3D_KH_MH_TG_01` | KH × MH × TG (3D) |
+| `Cube4BanHang_2D_KH_TG_01` | KH × TG |
+| `Cube4BanHang_2D_MH_KH_01` | MH × KH |
+| `Cube4BanHang_2D_MH_TG_01` | MH × TG |
+| `Cube4BanHang_1D_MH_01` | MH only |
+| `Cube4BanHang_1D_KH_01` | KH only |
+| `Cube4BanHang_1D_TG_01` | TG only |
+| `Cube4TonKho_3D_MH_CH_TG_01` | MH × CH × TG |
+| `Cube4TonKho_2D_CH_TG_01` | CH × TG |
+| `Cube4TonKho_2D_MH_TG_01` | MH × TG |
+| `Cube4TonKho_1D_TG_01` | TG only |
 
 ## Lưu Ý Quan Trọng
 1. **Không đặt cùng hierarchy ở ROWS và WHERE** → dùng subselect cho Dice

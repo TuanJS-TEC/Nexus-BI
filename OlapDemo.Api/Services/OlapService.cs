@@ -33,12 +33,30 @@ public class OlapService
                 OperationType = opType
             };
 
+            // ── [DEBUG] Log MDX gốc nhận vào ──────────────────────────────────────
+            _logger.LogInformation(
+                "[MDX-IN] opType={OpType} currentLevel={Level}\n{Mdx}",
+                opType, currentLevel, mdx);
+
             try
             {
                 using var conn = new AdomdConnection(_connectionString);
                 conn.Open();
                 string effectiveMdx = RewriteMdxWithDiscoveredSchema(conn, mdx);
                 result.Mdx = effectiveMdx;
+
+                // ── [DEBUG] Log MDX sau khi rewrite schema ──────────────────────────
+                if (!string.Equals(mdx, effectiveMdx, StringComparison.Ordinal))
+                    _logger.LogInformation(
+                        "[MDX-REWRITE] Schema rewrite applied:\n{EffectiveMdx}",
+                        effectiveMdx);
+                else
+                    _logger.LogInformation("[MDX-REWRITE] No rewrite needed, MDX unchanged.");
+
+                _logger.LogInformation(
+                    "[MDX-EXEC] Executing MDX opType={OpType}:\n{EffectiveMdx}",
+                    opType, effectiveMdx);
+
                 using var cmd = new AdomdCommand(effectiveMdx, conn);
 
                 // AdomdDataReader hoạt động với SELECT multidim nhưng trả về flat table
@@ -47,6 +65,7 @@ public class OlapService
                 int fieldCount = reader.FieldCount;
                 if (fieldCount == 0)
                 {
+                    _logger.LogWarning("[MDX-RESULT] Cube returned 0 columns for opType={OpType}", opType);
                     result.Success = false;
                     result.Error = "Không có cột dữ liệu";
                     return result;
@@ -66,10 +85,34 @@ public class OlapService
                         row[columns[i]] = reader.IsDBNull(i) ? null : reader.GetValue(i);
                     result.Rows.Add(row);
                 }
+
+                // ── [DEBUG] Log kết quả trả về từ cube ─────────────────────────────
+                _logger.LogInformation(
+                    "[MDX-RESULT] opType={OpType} → columns={Columns}, rowCount={RowCount}",
+                    opType,
+                    string.Join(" | ", columns),
+                    result.Rows.Count);
+
+                // Log tối đa 5 rows đầu tiên để xem sample data
+                int sampleCount = Math.Min(5, result.Rows.Count);
+                for (int r = 0; r < sampleCount; r++)
+                {
+                    var rowValues = result.Rows[r]
+                        .Select(kv => $"{kv.Key}={kv.Value ?? "NULL"}")
+                        .ToList();
+                    _logger.LogInformation(
+                        "[MDX-RESULT] row[{Index}]: {RowData}",
+                        r, string.Join(", ", rowValues));
+                }
+
+                if (result.Rows.Count > 5)
+                    _logger.LogInformation(
+                        "[MDX-RESULT] ... and {More} more rows (total {Total})",
+                        result.Rows.Count - 5, result.Rows.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Lỗi AdomdClient Execute: {Mdx}", result.Mdx ?? mdx);
+                _logger.LogError(ex, "[MDX-ERROR] Lỗi AdomdClient Execute opType={OpType}:\n{Mdx}", opType, result.Mdx ?? mdx);
                 result.Success = false;
                 result.Error = ex.Message;
             }
@@ -96,26 +139,36 @@ public class OlapService
             if (meta.Cubes.Count == 0)
                 meta.Cubes = GetFallbackCubeNames();
             meta.CubeInfos = meta.Cubes.Select(BuildCubeInfo).ToList();
+            string effectiveCube = ResolveEffectiveCube(cube, meta.Cubes);
 
             // Dùng AdomdSchemaDataSet để lấy members
             // Hoặc dùng MDX với AdomdDataReader
 
-            var hierarchies = await DiscoverHierarchyMapAsync(conn, cube);
+            var hierarchies = await DiscoverHierarchyMapAsync(conn, effectiveCube);
 
             if (!string.IsNullOrWhiteSpace(hierarchies.TimeHierarchyUniqueName))
-                meta.Years = await GetMembersByHierarchyAsync(conn, cube, hierarchies.TimeHierarchyUniqueName!, "Nam");
+                meta.Years = await GetMembersByHierarchyAsync(conn, effectiveCube, hierarchies.TimeHierarchyUniqueName!, "Nam");
 
             if (!string.IsNullOrWhiteSpace(hierarchies.ProductHierarchyUniqueName))
-                meta.Products = await GetMembersByHierarchyAsync(conn, cube, hierarchies.ProductHierarchyUniqueName!, "Ma MH");
+                meta.Products = await GetMembersByHierarchyAsync(conn, effectiveCube, hierarchies.ProductHierarchyUniqueName!, "Ma MH");
 
             if (!string.IsNullOrWhiteSpace(hierarchies.CustomerHierarchyUniqueName))
-                meta.Customers = await GetMembersByHierarchyAsync(conn, cube, hierarchies.CustomerHierarchyUniqueName!, "Ma KH");
+                meta.Customers = await GetMembersByHierarchyAsync(conn, effectiveCube, hierarchies.CustomerHierarchyUniqueName!, "Ma KH");
 
             if (!string.IsNullOrWhiteSpace(hierarchies.StoreHierarchyUniqueName))
-                meta.Stores = await GetMembersByHierarchyAsync(conn, cube, hierarchies.StoreHierarchyUniqueName!, "Ma CH");
+                meta.Stores = await GetMembersByHierarchyAsync(conn, effectiveCube, hierarchies.StoreHierarchyUniqueName!, "Ma CH");
 
             // Measures
-            meta.Measures = await GetMeasuresViaSchemaAsync(conn, cube);
+            meta.Measures = await GetMeasuresViaSchemaAsync(conn, effectiveCube);
+            _logger.LogInformation(
+                "[META] EffectiveCube={Cube} | Cubes={CubeCount} | Measures={MeasureCount} | Years={YearCount} | Products={ProductCount} | Customers={CustomerCount} | Stores={StoreCount}",
+                effectiveCube,
+                meta.Cubes.Count,
+                meta.Measures.Count,
+                meta.Years.Count,
+                meta.Products.Count,
+                meta.Customers.Count,
+                meta.Stores.Count);
         }
         catch (Exception ex)
         {
@@ -380,7 +433,7 @@ FROM [{cube}]";
                             continue;
 
                         // CUBE_SOURCE=1: cube; ignore perspectives/other artifacts.
-                        if (cubeSource == "1")
+                        if (cubeSource == "1" && IsSupportedChartCube(cubeName))
                             cubes.Add(cubeName);
                     }
                 }
@@ -395,6 +448,24 @@ FROM [{cube}]";
                 .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         });
+    }
+
+    private static bool IsSupportedChartCube(string cubeName)
+    {
+        if (string.IsNullOrWhiteSpace(cubeName)) return false;
+        return cubeName.StartsWith("Cube4BanHang_", StringComparison.OrdinalIgnoreCase)
+            || cubeName.StartsWith("Cube4TonKho_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ResolveEffectiveCube(string requestedCube, IReadOnlyList<string> availableCubes)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedCube)
+            && availableCubes.Contains(requestedCube, StringComparer.OrdinalIgnoreCase))
+        {
+            return requestedCube;
+        }
+
+        return availableCubes.FirstOrDefault() ?? requestedCube;
     }
 
     private sealed class HierarchyMap
@@ -589,26 +660,16 @@ FROM [{cube}]";
 
     private static List<string> GetFallbackCubeNames() =>
     [
-        "Cube4FactBanHang_3D_KH_MH_TG",
         "Cube4BanHang_3D_KH_MH_TG_01",
-        "Cube4BanHang_2D_KH_TG",
         "Cube4BanHang_2D_KH_TG_01",
-        "Cube4BanHang_2D_MH_TG",
+        "Cube4BanHang_2D_MH_KH_01",
         "Cube4BanHang_2D_MH_TG_01",
-        "Cube4BanHang_2D_MH_KH",
         "Cube4BanHang_1D_MH",
-        "Cube4BanHang_1D_MH_01",
-        "Cube4BanHang_1D_KH",
         "Cube4BanHang_1D_KH_01",
         "Cube4BanHang_1D_TG",
-        "Cube4BanHang_1D_TG_01",
-        "Cube4TonKho_3D_MH_CH_TG",
         "Cube4TonKho_3D_MH_CH_TG_01",
-        "Cube4TonKho_2D_CH_TG",
         "Cube4TonKho_2D_CH_TG_01",
-        "Cube4TonKho_2D_MH_TG",
         "Cube4TonKho_2D_MH_TG_01",
-        "Cube4TonKho_1D_TG",
         "Cube4TonKho_1D_TG_01"
     ];
 

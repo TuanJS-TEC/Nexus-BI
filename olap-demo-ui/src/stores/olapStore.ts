@@ -10,7 +10,7 @@ export type CustomerLevel = 'LoaiKH' | 'TenKH'
 export type LocationLevel = 'Bang' | 'ThanhPho'
 export type OperationType = '' | 'DrillDown' | 'RollUp' | 'DefaultQuery' | 'Query'
 export type FactType = 'BanHang' | 'TonKho'
-const HOME_CUBE = 'Cube4BanHang_3D_KH_MH_TG_01'
+const HOME_CUBE = 'Cube4BanHang_1D_TG'
 const DIMENSION_TOKEN: Record<AnalyticalDimension, string> = {
   ThoiGian: 'TG',
   KhachHang: 'KH',
@@ -18,11 +18,11 @@ const DIMENSION_TOKEN: Record<AnalyticalDimension, string> = {
   MatHang: 'MH',
 }
 const FACT_DEFAULTS: Record<FactType, { cube: string; measure: string; includeSoLuong: boolean }> = {
-  BanHang: { cube: 'Cube4BanHang_3D_KH_MH_TG_01', measure: 'Tong Tien', includeSoLuong: true },
+  BanHang: { cube: 'Cube4BanHang_1D_TG', measure: 'Tong Tien', includeSoLuong: true },
   TonKho: { cube: 'Cube4TonKho_3D_MH_CH_TG_01', measure: 'So Luong Trong Kho', includeSoLuong: false },
 }
 const FACT_DIMENSION_DEFAULTS: Record<FactType, AnalyticalDimension[]> = {
-  BanHang: ['ThoiGian', 'KhachHang', 'MatHang'],
+  BanHang: ['ThoiGian'],
   TonKho: ['ThoiGian', 'DiaDiem', 'MatHang'],
 }
 
@@ -67,6 +67,24 @@ function parseCubeNameLocally(cubeName: string): CubeInfo {
       AllowPivot: hasTime,
     },
   }
+}
+
+function normalizeFactLabel(value: unknown): FactType | null {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized.includes('tonkho') || normalized.includes('ton kho')) return 'TonKho'
+  if (normalized.includes('banhang') || normalized.includes('ban hang')) return 'BanHang'
+  return null
+}
+
+function inferDimensionTokensFromCubeName(cubeName: string): string[] {
+  const normalized = String(cubeName ?? '').toUpperCase()
+  const tokens = new Set<string>()
+  if (normalized.includes('_TG_')) tokens.add('TG')
+  if (normalized.includes('_KH_')) tokens.add('KH')
+  if (normalized.includes('_MH_')) tokens.add('MH')
+  if (normalized.includes('_CH_')) tokens.add('CH')
+  return Array.from(tokens).sort()
 }
 
 interface DrillContext {
@@ -183,6 +201,10 @@ function looksLikePureTimeToken(value: string): boolean {
   return false
 }
 
+function isCubeTimeCapable(cubeInfo: CubeInfo): boolean {
+  return cubeInfo.Capabilities.HasTime
+}
+
 export const useOlapStore = defineStore('olap', () => {
   const activeDimension = ref<DrillDimension>('ThoiGian')
   const levelByDimension = ref<LevelState>({
@@ -192,8 +214,8 @@ export const useOlapStore = defineStore('olap', () => {
   })
   const rowAxis = ref('Nam')
   const colAxis = ref('Ma MH')
-  const selectedCube = ref('Cube4BanHang_3D_KH_MH_TG_01')
-  const activeDimensions = ref<AnalyticalDimension[]>(['ThoiGian', 'KhachHang', 'MatHang'])
+  const selectedCube = ref('Cube4BanHang_1D_TG')
+  const activeDimensions = ref<AnalyticalDimension[]>(['ThoiGian'])
   const selectedMeasure = ref('Tong Tien')
   const includeSoLuong = ref(true)
 
@@ -354,6 +376,19 @@ export const useOlapStore = defineStore('olap', () => {
     try {
       metadata.value = await olapApi.getMetadata(selectedCube.value)
       metadataLoadedAt.value = new Date()
+      const discoveredCubes = metadata.value?.Cubes ?? []
+      const discoveredCubeInfos = metadata.value?.CubeInfos ?? []
+      if (discoveredCubes.length > 0 && !discoveredCubes.includes(selectedCube.value)) {
+        const preferTonKho = selectedCube.value.includes('TonKho')
+        const preferredTimeCube = discoveredCubeInfos.find(info =>
+          isCubeTimeCapable(info)
+          && (preferTonKho
+            ? info.Fact === 'Fact_TonKho'
+            : info.Fact === 'Fact_BanHang')
+        )?.Name
+        selectedCube.value = preferredTimeCube ?? discoveredCubes[0]
+        return
+      }
       if (metadata.value?.Measures?.length && !metadata.value.Measures.includes(selectedMeasure.value)) {
         selectedMeasure.value = metadata.value.Measures[0]
       }
@@ -405,8 +440,34 @@ export const useOlapStore = defineStore('olap', () => {
 
   function resolveCubeByDimensions(dimensions: AnalyticalDimension[], fact: FactType): string | null {
     const expected = normalizeTokens(dimensions.map(d => DIMENSION_TOKEN[d]))
+    const expectedCount = expected.length
+    const expectedKey = expected.join('_')
+    const preferredCubeByKey: Record<FactType, Record<string, string>> = {
+      BanHang: {
+        TG: 'Cube4BanHang_1D_TG',
+        KH: 'Cube4BanHang_1D_KH_01',
+        MH: 'Cube4BanHang_1D_MH',
+        KH_TG: 'Cube4BanHang_2D_KH_TG_01',
+        KH_MH: 'Cube4BanHang_2D_MH_KH_01',
+        MH_TG: 'Cube4BanHang_2D_MH_TG_01',
+      },
+      TonKho: {
+        TG: 'Cube4TonKho_1D_TG_01',
+        CH_TG: 'Cube4TonKho_2D_CH_TG_01',
+        MH_TG: 'Cube4TonKho_2D_MH_TG_01',
+      },
+    }
+    const hardPreferred = preferredCubeByKey[fact]?.[expectedKey]
+    if (hardPreferred) {
+      const availableByName = new Set((metadata.value?.Cubes ?? []).map(c => c.toUpperCase()))
+      const availableByInfo = new Set((metadata.value?.CubeInfos ?? []).map(c => c.Name.toUpperCase()))
+      if (availableByName.has(hardPreferred.toUpperCase()) || availableByInfo.has(hardPreferred.toUpperCase())) {
+        return hardPreferred
+      }
+    }
+
     const fromBackend = cubeMappings.value
-      .filter(item => item.fact === fact)
+      .filter(item => normalizeFactLabel(item.fact) === fact)
       .filter(item => {
         const tokens = normalizeTokens(item.dimensions)
         return tokens.length === expected.length && tokens.every((t, i) => t === expected[i])
@@ -414,7 +475,7 @@ export const useOlapStore = defineStore('olap', () => {
       .map(item => item.cube)
 
     const fromMetadata = (metadata.value?.CubeInfos ?? [])
-      .filter(c => (fact === 'BanHang' ? c.Fact === 'Fact_BanHang' : c.Fact === 'Fact_TonKho'))
+      .filter(c => normalizeFactLabel(c.Fact) === fact)
       .filter(c => {
         const tokens = normalizeTokens([
           c.Capabilities.HasProduct ? 'MH' : '',
@@ -426,17 +487,62 @@ export const useOlapStore = defineStore('olap', () => {
       })
       .map(c => c.Name)
 
-    const candidates = [...new Set([...fromBackend, ...fromMetadata])]
-    if (!candidates.length) return null
-    const preferred = candidates.find(c => c.endsWith('_01'))
-    return preferred ?? candidates.sort((a, b) => a.localeCompare(b))[0]
+    const fromCubeName = (metadata.value?.Cubes ?? [])
+      .filter(name => normalizeFactLabel(name) === fact)
+      .filter(name => name.endsWith('_01'))
+      .filter(name => {
+        const tokens = inferDimensionTokensFromCubeName(name)
+        return tokens.length === expectedCount && tokens.every((t, i) => t === expected[i])
+      })
+
+    const candidates = [...new Set([...fromBackend, ...fromMetadata, ...fromCubeName])]
+    if (candidates.length) {
+      const exactDimension = candidates
+        .filter(name => name.toUpperCase().includes(`_${expectedCount}D_`))
+      const source = exactDimension.length ? exactDimension : candidates
+      const timeOnly = expectedCount === 1 && expected[0] === 'TG'
+        ? source.find(c => /_1D_TG_/i.test(c))
+        : undefined
+      if (timeOnly) return timeOnly
+      const preferred = source.find(c => c.endsWith('_01'))
+      return preferred ?? source.sort((a, b) => a.localeCompare(b))[0]
+    }
+
+    // Fallback: choose closest cube of same fact by capability, prioritizing time-only scenarios.
+    const sameFactInfos = (metadata.value?.CubeInfos ?? [])
+      .filter(c => normalizeFactLabel(c.Fact) === fact)
+      .filter(c => c.Name?.endsWith('_01'))
+    if (!sameFactInfos.length) return null
+
+    const needTime = expected.includes('TG')
+    const needCustomer = expected.includes('KH')
+    const needProduct = expected.includes('MH')
+    const needStore = expected.includes('CH')
+
+    const capabilityMatches = sameFactInfos.filter(c =>
+      (!needTime || c.Capabilities.HasTime)
+      && (!needCustomer || c.Capabilities.HasCustomer)
+      && (!needProduct || c.Capabilities.HasProduct)
+      && (!needStore || c.Capabilities.HasStore)
+    )
+
+    const closest = (capabilityMatches.length ? capabilityMatches : sameFactInfos)
+      .sort((a, b) => {
+        const dimA = Number.isFinite(a.DimensionCount) ? a.DimensionCount : 99
+        const dimB = Number.isFinite(b.DimensionCount) ? b.DimensionCount : 99
+        if (dimA !== dimB) return dimA - dimB
+        return a.Name.localeCompare(b.Name)
+      })[0]
+
+    return closest?.Name ?? null
   }
 
-  async function syncCubeByDimensions(dimensions: AnalyticalDimension[] = activeDimensions.value) {
+  async function syncCubeByDimensions(dimensions: AnalyticalDimension[] = activeDimensions.value): Promise<boolean> {
     const resolved = resolveCubeByDimensions(dimensions, currentFact.value)
-    if (!resolved || resolved === selectedCube.value) return
+    if (!resolved || resolved === selectedCube.value) return false
     cubeSwitchMode.value = 'preserve'
     selectedCube.value = resolved
+    return true
   }
 
   const cubeSwitchMode = ref<'default' | 'preserve'>('default')
@@ -683,7 +789,10 @@ export const useOlapStore = defineStore('olap', () => {
       levelByDimension.value[dimension] = (dimension === 'ThoiGian' ? 'Nam' : (dimension === 'KhachHang' ? 'LoaiKH' : 'Bang')) as never
       activeDimension.value = dimension
     }
-    await syncCubeByDimensions(next)
+    const changedCube = await syncCubeByDimensions(next)
+    if (!changedCube) {
+      await queryCurrentView()
+    }
   }
 
   async function removeDimension(dimension: AnalyticalDimension) {
@@ -717,7 +826,10 @@ export const useOlapStore = defineStore('olap', () => {
     if (!next.includes(activeDimension.value)) {
       activeDimension.value = (next.find(d => d !== 'MatHang') ?? 'ThoiGian') as DrillDimension
     }
-    await syncCubeByDimensions(next)
+    const changedCube = await syncCubeByDimensions(next)
+    if (!changedCube) {
+      await queryCurrentView()
+    }
   }
 
   async function runOperation(op: 'DrillDown' | 'RollUp') {
@@ -739,10 +851,12 @@ export const useOlapStore = defineStore('olap', () => {
     await loadDefaultQuery()
   }
 
-  watch(selectedMeasure, (measure) => {
+  watch(selectedMeasure, async (measure, prev) => {
     if (measure === 'So Luong Dat' && includeSoLuong.value) {
       includeSoLuong.value = false
     }
+    if (!prev || measure === prev || isLoading.value) return
+    await queryCurrentView()
   }, { immediate: true })
 
   watch(selectedCube, async () => {

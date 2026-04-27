@@ -21,22 +21,24 @@
           <summary>Bảng dữ liệu</summary>
           <ul>
             <li>
-              <button
+              <Button
                 class="cube-item"
                 :class="{ active: store.currentFact === 'BanHang' }"
+                text
+                size="small"
+                label="Bán Hàng"
                 @click="store.selectFact('BanHang')"
-              >
-                Bán Hàng
-              </button>
+              />
             </li>
             <li>
-              <button
+              <Button
                 class="cube-item"
                 :class="{ active: store.currentFact === 'TonKho' }"
+                text
+                size="small"
+                label="Tồn Kho"
                 @click="store.selectFact('TonKho')"
-              >
-                Tồn Kho
-              </button>
+              />
             </li>
           </ul>
         </details>
@@ -44,72 +46,97 @@
           <summary>Measures</summary>
           <ul>
             <li v-for="measure in store.metadata?.Measures ?? []" :key="measure">
-              <button
+              <Button
                 class="measure-item"
                 :class="{ active: store.selectedMeasure === measure }"
+                text
+                size="small"
+                :label="measure"
                 @click="onSelectMeasure(measure)"
-              >
-                {{ measure }}
-              </button>
+              />
             </li>
           </ul>
         </details>
       </div>
 
+      <section class="stats-grid sidebar-stats">
+        <Card v-for="stat in stats" :key="stat.label" class="stat-tile">
+          <template #content>
+            <span class="stat-label">{{ stat.label }}</span>
+            <div class="stat-value">{{ stat.value }}</div>
+          </template>
+        </Card>
+      </section>
+
       <div class="connection-status">
         <div class="status-indicator" :class="{ active: isConnected }"></div>
-        <span>{{ isConnected ? 'SSAS Connected' : 'Disconnected' }}</span>
+        <Chip
+          :label="isConnected ? 'SSAS Connected' : 'Disconnected'"
+          :icon="isConnected ? 'pi pi-check-circle' : 'pi pi-times-circle'"
+          class="connection-chip"
+          :class="{ connected: isConnected }"
+        />
       </div>
     </aside>
 
     <main class="content-area">
       <header class="top-bar">
         <div class="top-left">
-          <button class="util-btn util-btn-home" @click="onGoHome">Home</button>
+          <Button class="util-btn util-btn-home" label="Home" icon="pi pi-home" @click="onGoHome" />
           <div class="breadcrumb">Workspace / Sales Analysis / {{ store.selectedCube }}</div>
         </div>
         <div class="top-actions">
-          <ActionButtons />
           <div class="utility-bar">
             <div class="density-toggle">
-              <button :class="{ active: store.tableDensity === 'compact' }" @click="store.tableDensity = 'compact'">Compact</button>
-              <button :class="{ active: store.tableDensity === 'comfortable' }" @click="store.tableDensity = 'comfortable'">Comfortable</button>
+              <Button
+                text
+                size="small"
+                :class="{ active: store.tableDensity === 'compact' }"
+                label="Compact"
+                @click="store.tableDensity = 'compact'"
+              />
+              <Button
+                text
+                size="small"
+                :class="{ active: store.tableDensity === 'comfortable' }"
+                label="Comfortable"
+                @click="store.tableDensity = 'comfortable'"
+              />
             </div>
-            <button class="util-btn" @click="exportCsv">CSV</button>
-            <button class="util-btn util-btn-primary" @click="exportExcel">Export Excel</button>
-            <button class="util-btn" @click="exportPdf">PDF</button>
+            <Button class="util-btn" label="CSV" icon="pi pi-download" text @click="exportCsv" />
+            <Button class="util-btn util-btn-primary" label="Export Excel" icon="pi pi-file-excel" @click="exportExcel" />
+            <Button class="util-btn" label="PDF" icon="pi pi-file-pdf" text @click="exportPdf" />
           </div>
         </div>
       </header>
 
-      <div class="error-banner" v-if="store.errorMessage">
-        <span>{{ store.errorMessage }}</span>
-        <button @click="store.errorMessage = ''" aria-label="Đóng thông báo">Đóng</button>
-      </div>
-      <div class="success-banner" v-else-if="successMessage">
-        <span>{{ successMessage }}</span>
-      </div>
+      <Message v-if="store.errorMessage" class="banner-message" severity="error" closable @close="store.errorMessage = ''">
+        {{ store.errorMessage }}
+      </Message>
+      <Message v-else-if="successMessage" class="banner-message" severity="success">
+        {{ successMessage }}
+      </Message>
+      <section class="operation-panel">
+        <ActionButtons />
+      </section>
 
       <div class="scroll-container">
-        <section class="stats-grid">
-          <div v-for="stat in stats" :key="stat.label" class="stat-tile">
-            <span class="stat-label">{{ stat.label }}</span>
-            <div class="stat-value">{{ stat.value }}</div>
-          </div>
-        </section>
-
         <details class="mdx-preview" v-if="store.resultData?.Mdx">
           <summary>MDX Preview</summary>
           <pre>{{ store.resultData.Mdx }}</pre>
         </details>
 
         <div class="data-grid">
-          <div class="shadow-card overview-card">
-            <OlapChart />
-          </div>
-          <div class="shadow-card table-card">
-            <OlapTable />
-          </div>
+          <Card class="shadow-card overview-card">
+            <template #content>
+              <OlapChart />
+            </template>
+          </Card>
+          <Card class="shadow-card table-card">
+            <template #content>
+              <OlapTable />
+            </template>
+          </Card>
         </div>
       </div>
     </main>
@@ -118,6 +145,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import Button from 'primevue/button'
+import Card from 'primevue/card'
+import Chip from 'primevue/chip'
+import Message from 'primevue/message'
 import ActionButtons from '@/components/ActionButtons.vue'
 import OlapChart from '@/components/OlapChart.vue'
 import OlapTable from '@/components/OlapTable.vue'
@@ -265,14 +296,25 @@ function exportPdf() {
   margin-bottom: 0.5rem;
 }
 
+.metadata {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 16px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
 .metadata summary {
   cursor: pointer;
-  font-size: 0.8rem;
-  color: var(--text-on-dark);
+  font-size: 0.82rem;
+  color: #f8fafc;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .metadata summary:hover {
-  color: var(--color-interaction-active);
+  color: #d1fae5;
 }
 
 .metadata ul {
@@ -280,24 +322,46 @@ function exportPdf() {
   padding-left: 1rem;
   max-height: 120px;
   overflow: auto;
-  font-size: 0.75rem;
-  color: color-mix(in srgb, var(--text-on-dark) 74%, #000000);
+  font-size: 0.79rem;
+  color: #e2e8f0;
 }
 
 .metadata li:hover {
-  color: var(--color-interaction-active);
+  color: #bbf7d0;
+}
+
+.metadata .section-title {
+  color: #ecfeff;
+}
+
+.metadata :deep(.p-button) {
+  color: #f8fafc;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.metadata :deep(.p-button:hover) {
+  color: #052e16;
+  background: rgba(187, 247, 208, 0.9);
+  border-color: rgba(134, 239, 172, 0.9);
+}
+
+.metadata .cube-item.active,
+.metadata .measure-item.active {
+  color: #052e16;
+  background: rgba(187, 247, 208, 0.92);
+  border-color: rgba(74, 222, 128, 0.95);
+  font-weight: 700;
 }
 
 .cube-item {
   width: 100%;
   text-align: left;
   border: 1px solid transparent;
-  background: transparent;
   color: inherit;
   border-radius: 6px;
+  justify-content: flex-start;
   padding: 0.2rem 0.35rem;
-  font: inherit;
-  cursor: pointer;
 }
 
 .cube-item:hover {
@@ -316,12 +380,10 @@ function exportPdf() {
   width: 100%;
   text-align: left;
   border: 1px solid transparent;
-  background: transparent;
   color: inherit;
   border-radius: 6px;
+  justify-content: flex-start;
   padding: 0.2rem 0.35rem;
-  font: inherit;
-  cursor: pointer;
 }
 
 .measure-item:hover {
@@ -341,7 +403,15 @@ function exportPdf() {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.82rem;
+}
+
+.connection-chip {
+  background: color-mix(in srgb, var(--text-on-dark) 18%, transparent);
+  color: var(--text-on-dark);
+}
+
+.connection-chip.connected {
+  background: color-mix(in srgb, var(--color-status-connected) 24%, transparent);
   color: var(--text-on-dark);
 }
 
@@ -404,17 +474,17 @@ function exportPdf() {
   overflow: hidden;
 }
 
-.density-toggle button {
+.density-toggle :deep(.p-button) {
   border: none;
+  border-radius: 0;
   background: #fff;
   padding: 0.35rem 0.6rem;
   font-size: 0.75rem;
   color: var(--text-muted);
-  cursor: pointer;
   transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
-.density-toggle button.active {
+.density-toggle :deep(.p-button.active) {
   background: var(--color-brand-primary);
   color: var(--text-on-brand);
 }
@@ -423,10 +493,9 @@ function exportPdf() {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
-  padding: 0.35rem 0.6rem;
+  padding: 0.4rem 0.7rem;
   font-size: 0.75rem;
   color: var(--text-muted);
-  cursor: pointer;
   transition: backdrop-filter 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
@@ -464,40 +533,44 @@ function exportPdf() {
   overflow: auto;
 }
 
-.error-banner {
+.banner-message {
   margin: 0.75rem 1rem 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-radius: 10px;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--color-state-critical-border);
-  background: var(--color-state-critical-bg);
-  color: var(--color-state-critical-text);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
 }
 
-.error-banner button {
-  border: none;
-  background: transparent;
-  color: var(--color-state-critical-text);
-  cursor: pointer;
+.operation-panel {
+  margin: 0.75rem 1rem 0;
 }
 
-.success-banner {
-  margin: 0.75rem 1rem 0;
-  border-radius: 10px;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--color-state-success-border);
-  background: var(--color-state-success-bg);
-  color: var(--color-state-success-text);
-  font-size: 0.8rem;
+.operation-panel :deep(.action-panel) {
+  width: 100%;
+  max-width: none;
+  border-radius: 12px;
 }
 
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.75rem;
+}
+
+.sidebar-stats {
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+
+.sidebar-stats .stat-tile {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(154, 216, 114, 0.25);
+}
+
+.sidebar-stats .stat-label {
+  color: color-mix(in srgb, var(--text-on-dark) 74%, #000000);
+}
+
+.sidebar-stats .stat-value {
+  color: var(--text-on-dark);
+  font-size: 0.93rem;
 }
 
 .stat-tile {
@@ -570,17 +643,13 @@ function exportPdf() {
 .mdx-preview:hover,
 .shadow-card:hover,
 .util-btn:hover,
-.density-toggle button:hover {
+.density-toggle :deep(.p-button:hover) {
   background: color-mix(in srgb, #ffffff 70%, transparent);
   border-color: color-mix(in srgb, var(--color-interaction-active) 38%, var(--border));
   backdrop-filter: blur(10px) saturate(125%);
   -webkit-backdrop-filter: blur(10px) saturate(125%);
   box-shadow: 0 10px 22px -14px rgb(15 23 42 / 35%);
   transform: translateY(-1px);
-}
-
-.top-actions :deep(.action-panel) {
-  min-width: 560px;
 }
 
 @media (max-width: 1280px) {
@@ -590,9 +659,6 @@ function exportPdf() {
   .top-actions {
     flex-direction: column;
     align-items: flex-end;
-  }
-  .top-actions :deep(.action-panel) {
-    min-width: 100%;
   }
 }
 
@@ -604,9 +670,6 @@ function exportPdf() {
     width: 100%;
     border-right: none;
     border-bottom: 1px solid rgba(154, 216, 114, 0.3);
-  }
-  .top-actions :deep(.action-panel) {
-    min-width: 100%;
   }
 }
 

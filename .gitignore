@@ -36,3 +36,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 .gitnexus
+
+# Local AI/tooling artifacts
+.claude/
+AGENTS.md
+CLAUDE.md
+OlapDemo.Api/tmpobj/

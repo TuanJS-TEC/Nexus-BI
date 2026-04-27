@@ -1,4 +1,5 @@
 using OlapDemo.Api.Services;
+using OlapDemo.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,6 +29,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("VueFrontend");
+app.UseMiddleware<RequestResponseLoggingMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 app.Run("http://localhost:5000");

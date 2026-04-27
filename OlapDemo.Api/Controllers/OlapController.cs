@@ -17,7 +17,7 @@ public class OlapController : ControllerBase
         _config = config;
     }
 
-    private string DefaultCube => _config["Ssas:DefaultCube"] ?? "Cube4BanHang_3D_KH_MH_TG_01";
+    private string DefaultCube => _config["Ssas:DefaultCube"] ?? "Cube4BanHang_1D_TG";
 
     [HttpGet("metadata")]
     public async Task<IActionResult> GetMetadata([FromQuery] string? cube)
@@ -108,13 +108,31 @@ public class OlapController : ControllerBase
     {
         try
         {
-            string effectiveCube = string.IsNullOrWhiteSpace(cube) ? DefaultCube : cube;
+            var metadata = await _olap.GetMetadataAsync(cube ?? DefaultCube);
+            string requestedCube = string.IsNullOrWhiteSpace(cube) ? DefaultCube : cube;
+            bool requestTonKho = requestedCube.Contains("TonKho", StringComparison.OrdinalIgnoreCase);
+            var exactRequested = metadata.CubeInfos
+                .FirstOrDefault(info => info.Name.Equals(requestedCube, StringComparison.OrdinalIgnoreCase));
+            var timeAwareFallback = metadata.CubeInfos
+                .Where(info => info.Capabilities.HasTime)
+                .OrderBy(info => info.DimensionCount)
+                .FirstOrDefault(info => requestTonKho
+                    ? info.Fact.Contains("TonKho", StringComparison.OrdinalIgnoreCase)
+                    : info.Fact.Contains("BanHang", StringComparison.OrdinalIgnoreCase));
+
+            string effectiveCube = exactRequested?.Name
+                ?? metadata.Cubes.FirstOrDefault(c => c.Equals(requestedCube, StringComparison.OrdinalIgnoreCase))
+                ?? timeAwareFallback?.Name
+                ?? metadata.Cubes.FirstOrDefault()
+                ?? requestedCube;
             string measureSet = BuildDefaultMeasureSet(effectiveCube);
+            string rowSet = BuildDefaultRowSet(effectiveCube);
+            string rowLevel = BuildDefaultRowLevel(effectiveCube);
             string mdx = $@"SELECT {measureSet} ON COLUMNS,
-  NON EMPTY [Dim_Thoi_Gian].[Hierarchy].[Nam].Members ON ROWS
+  NON EMPTY {rowSet} ON ROWS
 FROM [{effectiveCube}]";
 
-            return Ok(await _olap.ExecuteAsync(mdx, "Nam", "DefaultQuery"));
+            return Ok(await _olap.ExecuteAsync(mdx, rowLevel, "DefaultQuery"));
         }
         catch (Exception ex)
         {
@@ -163,6 +181,42 @@ FROM [{effectiveCube}]";
         }
 
         return "{ [Measures].[Tong Tien], [Measures].[So Luong Dat] }";
+    }
+
+    private static string BuildDefaultRowSet(string cube)
+    {
+        var rule = CubeNameRules.Parse(cube);
+
+        if (rule.DimensionCount >= 3 && rule.HasTime && rule.HasProduct && rule.HasStore)
+            return "[Dim Thoi Gian].[Hierarchy].[Nam].Members * [Dim Mat Hang].[Ma MH].Members * [Dim Cua Hang].[Ma CH].Members";
+        if (rule.DimensionCount >= 3 && rule.HasTime && rule.HasProduct && rule.HasCustomer)
+            return "[Dim Thoi Gian].[Hierarchy].[Nam].Members * [Dim Mat Hang].[Ma MH].Members * [Dim Khach Hang].[Ma KH].Members";
+
+        if (rule.HasTime && rule.HasCustomer && rule.DimensionCount >= 2)
+            return "[Dim Thoi Gian].[Hierarchy].[Nam].Members * [Dim Khach Hang].[Ma KH].Members";
+        if (rule.HasTime && rule.HasProduct && rule.DimensionCount >= 2)
+            return "[Dim Thoi Gian].[Hierarchy].[Nam].Members * [Dim Mat Hang].[Ma MH].Members";
+        if (rule.HasTime && rule.HasStore && rule.DimensionCount >= 2)
+            return "[Dim Thoi Gian].[Hierarchy].[Nam].Members * [Dim Cua Hang].[Ma CH].Members";
+        if (rule.HasProduct && rule.HasCustomer && rule.DimensionCount >= 2)
+            return "[Dim Mat Hang].[Ma MH].Members * [Dim Khach Hang].[Ma KH].Members";
+
+        if (rule.HasTime) return "[Dim Thoi Gian].[Hierarchy].[Nam].Members";
+        if (rule.HasCustomer) return "[Dim Khach Hang].[Ma KH].Members";
+        if (rule.HasProduct) return "[Dim Mat Hang].[Ma MH].Members";
+        if (rule.HasStore) return "[Dim Cua Hang].[Ma CH].Members";
+
+        return "[Dim Thoi Gian].[Hierarchy].[Nam].Members";
+    }
+
+    private static string BuildDefaultRowLevel(string cube)
+    {
+        var rule = CubeNameRules.Parse(cube);
+        if (rule.HasTime) return "Nam";
+        if (rule.HasCustomer) return "Ma KH";
+        if (rule.HasProduct) return "Ma MH";
+        if (rule.HasStore) return "Ma CH";
+        return "Nam";
     }
 }
 

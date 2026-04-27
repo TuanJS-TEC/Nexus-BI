@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using OlapDemo.Api.Middleware;
 using OlapDemo.Api.Services;
 
 namespace OlapDemo.Api
@@ -58,6 +59,7 @@ namespace OlapDemo.Api
             }
 
             app.UseCors("VueFrontend");
+            app.UseMiddleware<RequestResponseLoggingMiddleware>();
             app.UseRouting();
             app.UseAuthorization();
             app.UseEndpoints(endpoints =>
