@@ -1,4 +1,4 @@
-# 🧊 Nexus BI - Multidimensional Data Analytics Platform
+# Nexus BI - Multidimensional Data Analytics Platform
 
 A high-performance Business Intelligence solution designed for sophisticated multi-dimensional data analysis. Built with a robust **.NET Core** backend and a reactive **Vue 3** frontend, this platform leverages **SQL Server Analysis Services (SSAS)** and **MDX** to deliver deep, interactive insights through dynamic visualizations and seamless data exploration.
 
@@ -28,35 +28,6 @@ cd E:\PTIT_Document\KDL_WEB\olap-demo-ui
 npm run dev
 # UI chạy tại: http://localhost:5173/dashboard
 ```
-
----
-
-## 4 Phép Toán OLAP
-
-### ⬇️ Drill Down
-- **Mục đích**: Đi sâu vào chi tiết hơn
-- **Luồng**: `Năm → Quý → Tháng`
-- **Cách dùng**: Chọn Năm → nhấn **Drill Down** → thấy các Quý → nhấn lại → thấy Tháng
-
-### ⬆️ Roll Up
-- **Mục đích**: Gộp lên cấp tổng hợp hơn
-- **Luồng**: `Tháng → Quý → Năm`
-- **Cách dùng**: Khi đang ở cấp Tháng → nhấn **Roll Up** → về cấp Quý
-
-### ✂️ Slice
-- **Mục đích**: Lọc 1 chiều duy nhất
-- **Ví dụ**: Chỉ xem Năm = 2025
-- **Cách dùng**: Chọn **Năm** → nhấn **Slice** → thấy dữ liệu tháng của năm đó
-
-### 🎲 Dice
-- **Mục đích**: Lọc nhiều chiều cùng lúc
-- **Ví dụ**: Năm = 2025 + Mã MH = MH00001 + Mã KH = KH00001
-- **Cách dùng**: Chọn Năm + Product + Customer → nhấn **Dice** → kết quả thu hẹp
-
-### 🔄 Pivot
-- **Mục đích**: Hoán đổi trục hàng/cột
-- **Ví dụ**: Time × Product ↔ Product × Time
-- **Cách dùng**: Nhấn **Pivot** → trục đổi, grand total giữ nguyên
 
 ---
 
